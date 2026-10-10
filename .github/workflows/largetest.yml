@@ -1,9 +1,0 @@
-name: Large runner test
-on:
-  workflow_dispatch:
-jobs:
-  probe:
-    runs-on: ubuntu-latest-4-cores
-    steps:
-      - name: disk
-        run: df -h / && nproc
