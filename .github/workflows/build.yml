@@ -126,10 +126,5 @@ jobs:
       - name: Verify the composed image on Docker Hub
         run: |
           set -euo pipefail
-          curl -s --max-time 40 "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USER }}/comfyui-h3-novita/tags?page_size=10" \
-            | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-for t in d.get('results',[]):
-    print(f\"  {t['name']:<24} {t.get('full_size',0)/1e9:.2f} GB\")
-"
+          curl -s --max-time 40 "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USER }}/comfyui-h3-novita/tags?page_size=10" > /tmp/tags.json
+          python3 -c "import json;d=json.load(open('/tmp/tags.json'));[print('  %-24s %.2f GB' % (t['name'], t.get('full_size',0)/1e9)) for t in d.get('results',[])]"
