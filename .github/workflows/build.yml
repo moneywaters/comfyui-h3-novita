@@ -22,8 +22,8 @@ on:
         default: "cu130"
         required: true
       install_sage:
-        description: "Build SageAttention (1/0)"
-        default: "1"
+        description: "Build SageAttention (1/0) — off by default, it OOM-kills small runners"
+        default: "0"
         required: true
 
 permissions:
@@ -49,6 +49,7 @@ jobs:
           sudo rm -rf /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache/go || true
           sudo rm -rf /usr/lib/jvm /usr/local/lib/node_modules /opt/hostedtoolcache/PyPy || true
           sudo rm -rf /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/node /usr/local/.ghcup || true
+          sudo rm -rf /usr/share/mysql /usr/share/postgresql /opt/hostedtoolcache || true
           sudo apt-get clean
           df -h /
 
