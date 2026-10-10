@@ -64,8 +64,13 @@ case "$PART" in
         "$H3/vae/minimax_h3_video_vae_fp16.safetensors" 5000000000
     fetch vae minimax_h3_audio_vae_fp32.safetensors \
         "$H3/vae/minimax_h3_audio_vae_fp32.safetensors" 500000000
+    # turbo speed-up LoRAs referenced by the shipped workflows / templates
     fetch loras minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors \
         "$H3/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors" 1800000000
+    fetch loras minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors \
+        "$H3/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors" 1800000000
+    fetch loras minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors \
+        "$H3/loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors" 1800000000
     ;;
   seedvr2)
     fetch SEEDVR2 seedvr2_ema_3b_fp16.safetensors "$SV/seedvr2_ema_3b_fp16.safetensors" 6500000000
