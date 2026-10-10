@@ -15,8 +15,6 @@ on:
         description: "Build SageAttention (1/0)"
         default: "1"
         required: true
-  push:
-    branches: [main]
 
 jobs:
   build:
