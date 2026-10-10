@@ -6,8 +6,7 @@ set -uo pipefail
 M="${COMFYUI_PATH:-/opt/ComfyUI}/models"
 PART="${PART:?PART must be set}"
 HF="${HF_TOKEN:-}"
-CURL=/usr/local/bin/curl
-CACERT=/opt/ca/ca-certificates.crt
+CURL=/usr/bin/curl
 FAILED=0
 
 if [ -z "$HF" ]; then echo "ERROR: HF_TOKEN empty"; exit 1; fi
@@ -23,7 +22,7 @@ fetch() {  # <subdir> <filename> <url> <min-bytes>
     echo "  GET $subdir/$name"
     if "$CURL" --fail --location --silent --show-error \
             --retry 6 --retry-delay 5 --retry-all-errors --create-dirs \
-            --cacert "$CACERT" -H "Authorization: Bearer ${HF}" \
+            -H "Authorization: Bearer ${HF}" \
             -o "$dest.partial" "$url"; then
         local got; got=$(stat -c%s "$dest.partial" 2>/dev/null || echo 0)
         if [ "$got" -ge "$minbytes" ]; then

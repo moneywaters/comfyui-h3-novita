@@ -1,0 +1,27 @@
+name: Probe builder
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.BUILDER_SSH_KEY }}" > ~/.ssh/builder
+          chmod 600 ~/.ssh/builder
+
+      - name: Run probe on the builder
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/builder \
+              -p "${{ secrets.BUILDER_PORT }}" \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              root@"${{ secrets.BUILDER_HOST }}" \
+              "bash -s" < ops/probe-podman.sh

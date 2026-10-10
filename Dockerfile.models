@@ -3,26 +3,28 @@
 #
 #   podman build --build-arg PART=h3diff -f Dockerfile.models .
 #
-# Built FROM the same nvidia/cuda base as Dockerfile.env so that the extra
-# layers are pure "model file" overlays. ops/compose-image.py then appends
-# only the *new* layers of each PART onto the env image, producing one image
-# with every model baked in — while no single build ever needs more than
-# ~25 GB of runner disk.
+# Built FROM the same nvidia/cuda base as Dockerfile.env so the extra layers are
+# pure "model file" overlays. ops/compose-image.py then appends only the *new*
+# layers of each PART onto the env image, producing one image with every model
+# baked in while no single build needs more than ~25 GB of runner disk.
 #
-# curl is copied from the static curlimages/curl image so we never touch apt
-# (which would clobber the parent image's dpkg database when overlaid).
+# NOTE: curl is installed here from apt. That rewrite of /var/lib/dpkg/status is
+# inherited by the composed image, which is cosmetically inaccurate for packages
+# but has no effect at runtime (nothing in the container runs apt).
 # =============================================================================
 FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
 
+ARG DEBIAN_FRONTEND=noninteractive
 ARG PART=h3diff
 ARG HF_TOKEN=""
 
-COPY --from=curlimages/curl:latest /usr/local/bin/curl /usr/local/bin/curl
-COPY --from=curlimages/curl:latest /etc/ssl/certs/ca-certificates.crt /opt/ca/ca-certificates.crt
-COPY build/models-part.sh /opt/models-part.sh
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --version | head -1
 
-RUN chmod +x /opt/models-part.sh \
-    && /usr/local/bin/curl --version | head -1
+COPY build/models-part.sh /opt/models-part.sh
+RUN chmod +x /opt/models-part.sh
 
 RUN --mount=type=secret,id=hf_token,required=false \
     export HF_TOKEN="${HF_TOKEN:-$(cat /run/secrets/hf_token 2>/dev/null || true)}" \
