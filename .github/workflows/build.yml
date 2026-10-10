@@ -111,6 +111,7 @@ jobs:
         env:
           MODEL_PARTS: ${{ inputs.model_parts }}
           DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
         run: |
           set -euo pipefail
           PARTS=""

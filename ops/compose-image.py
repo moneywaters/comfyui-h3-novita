@@ -15,8 +15,10 @@ Usage:
       --env sha-env --parts sha-h3diff,sha-h3enc,... --out latest
 """
 import argparse
+import base64
 import hashlib
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -44,11 +46,25 @@ def log(*a):
     print(*a, flush=True)
 
 
+def _basic_auth():
+    """Docker Hub credentials for registry pushes, if supplied."""
+    u = os.environ.get("DOCKER_USER") or os.environ.get("REGISTRY_USER")
+    p = os.environ.get("DOCKER_PASS") or os.environ.get("DOCKER_TOKEN") \
+        or os.environ.get("REGISTRY_PASS")
+    if u and p:
+        return "Basic " + base64.b64encode(f"{u}:{p}".encode()).decode()
+    return None
+
+
 def get_token(repo, actions="pull,push"):
     url = f"{AUTH}?service=registry.docker.io&scope=repository:{repo}:{actions}"
+    basic = _basic_auth()
     for attempt in range(5):
         try:
-            with urllib.request.urlopen(url, timeout=60) as r:
+            req = urllib.request.Request(url)
+            if basic:
+                req.add_header("Authorization", basic)
+            with urllib.request.urlopen(req, timeout=60) as r:
                 return json.load(r)["token"]
         except Exception as e:
             if attempt == 4:
