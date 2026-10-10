@@ -1,0 +1,98 @@
+name: Build & push Novita image
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_set:
+        description: "Model set: video (H3+SeedVR2) or all (adds Qwen-Image 2.1)"
+        default: "video"
+        required: true
+      torch_index:
+        description: "PyTorch CUDA index (cu130 / cu128 / cu126)"
+        default: "cu130"
+        required: true
+      install_sage:
+        description: "Build SageAttention (1/0)"
+        default: "1"
+        required: true
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show disk before cleanup
+        run: df -h /
+
+      - name: Free disk space (reclaim ~40GB)
+        run: |
+          set -x
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache/go || true
+          sudo rm -rf /usr/lib/jvm /usr/local/lib/node_modules /opt/hostedtoolcache/PyPy || true
+          sudo rm -rf /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/node /usr/local/.ghcup || true
+          sudo apt-get clean
+          sudo docker image prune -af 2>/dev/null || true
+          echo "--- after cleanup ---"
+          df -h /
+
+      - name: Ensure podman is available
+        run: |
+          if ! command -v podman >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq podman
+          fi
+          podman --version
+          podman info --format '{{.Store.GraphRoot}}' || true
+
+      - name: Log in to Docker Hub
+        run: |
+          echo "${{ secrets.DOCKER_PASS }}" | podman login docker.io \
+            --username "${{ secrets.DOCKER_USER }}" --password-stdin
+
+      - name: Stage HF token as a build secret
+        run: |
+          install -m 600 /dev/null /tmp/hf_token
+          printf '%s' "${{ secrets.HF_TOKEN }}" > /tmp/hf_token
+          echo "hf token length: $(wc -c < /tmp/hf_token)"
+
+      - name: Build image (podman)
+        env:
+          MODEL_SET: ${{ inputs.model_set || 'video' }}
+          TORCH_INDEX: ${{ inputs.torch_index || 'cu130' }}
+          INSTALL_SAGE: ${{ inputs.install_sage || '1' }}
+        run: |
+          set -euo pipefail
+          IMAGE="docker.io/${{ secrets.DOCKER_USER }}/comfyui-h3-novita"
+          podman build \
+            --format oci \
+            --secret id=hf_token,src=/tmp/hf_token \
+            --build-arg MODEL_SET="${MODEL_SET}" \
+            --build-arg TORCH_INDEX="${TORCH_INDEX}" \
+            --build-arg INSTALL_SAGE="${INSTALL_SAGE}" \
+            --build-arg SSH_AUTHORIZED_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG6eQLbiJEo7wKVDj+1BswTpRJ2C8BU/hMFxhDYweS0n novita" \
+            -t "${IMAGE}:latest" \
+            -t "${IMAGE}:${MODEL_SET}-${TORCH_INDEX}" \
+            -f Dockerfile .
+          echo "--- image info ---"
+          podman images "${IMAGE}"
+          podman image inspect "${IMAGE}:latest" --format '{{.Size}} bytes'
+
+      - name: Push to Docker Hub
+        run: |
+          set -euo pipefail
+          IMAGE="docker.io/${{ secrets.DOCKER_USER }}/comfyui-h3-novita"
+          podman push "${IMAGE}:latest"
+          podman push "${IMAGE}:${{ inputs.model_set || 'video' }}-${{ inputs.torch_index || 'cu130' }}"
+
+      - name: Cleanup token
+        if: always()
+        run: rm -f /tmp/hf_token
+
+      - name: Disk after build
+        if: always()
+        run: df -h /
