@@ -11,11 +11,11 @@ on:
     inputs:
       parts:
         description: "JSON array of parts to build"
-        default: '["env","h3diff","h3enc","h3aux","seedvr2"]'
+        default: '["env","h3diff-fl2va","h3diff-ref2va","h3enc","h3aux","seedvr2"]'
         required: true
       model_parts:
         description: "Comma-separated model parts, in final layer order"
-        default: "h3diff,h3enc,h3aux,seedvr2"
+        default: "h3diff-fl2va,h3diff-ref2va,h3enc,h3aux,seedvr2"
         required: true
       torch_index:
         description: "PyTorch CUDA index"

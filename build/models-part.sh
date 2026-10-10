@@ -45,7 +45,11 @@ SV=https://huggingface.co/numz/SeedVR2_comfyUI/resolve/main
 
 echo "=== PART=$PART ==="
 case "$PART" in
-  h3diff)
+  h3diff-fl2va)
+    fetch diffusion_models minimax_h3_fl2va_pruned_int8_convrot.safetensors \
+        "$H3/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" 20000000000
+    ;;
+  h3diff-ref2va)
     fetch diffusion_models minimax_h3_ref2va_pruned_int8_convrot.safetensors \
         "$H3/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" 20000000000
     ;;
@@ -54,6 +58,8 @@ case "$PART" in
         "$H3/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors" 15000000000
     ;;
   h3aux)
+    fetch vae minimax_h3_video_vae_int8_convrot.safetensors \
+        "$H3/vae/minimax_h3_video_vae_int8_convrot.safetensors" 2700000000
     fetch vae minimax_h3_video_vae_fp16.safetensors \
         "$H3/vae/minimax_h3_video_vae_fp16.safetensors" 5000000000
     fetch vae minimax_h3_audio_vae_fp32.safetensors \
