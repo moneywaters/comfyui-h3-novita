@@ -20,6 +20,20 @@ n=$(find /opt/ComfyUI/custom_nodes -maxdepth 1 -mindepth 1 -type d | wc -l | tr 
 echo "  $n node directories"
 [ "$n" -ge 15 ] || { echo "  BAD: too few custom nodes"; FAIL=$((FAIL+1)); }
 
+# Each clone in nodes.sh is best-effort, so a pack can vanish silently (a rename or
+# a dead URL) and only surface later as a red node in a user's workflow. Assert the
+# classes the shipped workflows actually need are registered somewhere on disk.
+echo "=== required node classes ==="
+for cls in ThreeWaySwitch ComfyUI_MinimaxH3HybridLoader MinimaxH3LatentUpscalerNode2D ModelPreviewOverrideKJ; do
+    if grep -rqs --include='*.py' "\"$cls\"\|'$cls'" /opt/ComfyUI/custom_nodes; then
+        echo "  OK  $cls"
+    elif grep -rqs --include='*.py' "\b$cls\b" /opt/ComfyUI/custom_nodes; then
+        echo "  OK  $cls (unmapped ref)"
+    else
+        echo "  BAD $cls is not provided by any custom node pack"; FAIL=$((FAIL+1))
+    fi
+done
+
 echo "=== workflows ==="
 w=$(find /opt/ComfyUI/user/default/workflows -name '*.json' | wc -l | tr -d ' ')
 echo "  $w workflow(s)"

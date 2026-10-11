@@ -33,8 +33,8 @@ clone https://github.com/GACLove/ComfyUI-VFI.git                                
 clone https://github.com/sepiablue-ai/ComfyUI-MiniMax-H3-W4A4-VSA.git                ComfyUI-MiniMax-H3-W4A4-VSA
 # merges fl2va (base) + ref2va (overlay) tensor groups -> needs BOTH diffusion models
 clone https://github.com/scottmudge/ComfyUI_MinimaxH3HybridLoader.git                ComfyUI_MinimaxH3HybridLoader
-# neural latent upscaler — required by Seed Hunter v2.5.1's upscale pass
-clone https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler.git           Comfyui_Minimax_h3_latent_Upscaler
+# supplies ThreeWaySwitch, used twice by Seed Hunter v2.5.1
+clone https://github.com/gseth/ControlAltAI-Nodes.git                                ControlAltAI-Nodes
 
 # --- upscaling ---------------------------------------------------------------
 clone https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git      ComfyUI-SeedVR2_VideoUpscaler
