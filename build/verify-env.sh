@@ -24,7 +24,7 @@ echo "  $n node directories"
 # a dead URL) and only surface later as a red node in a user's workflow. Assert the
 # classes the shipped workflows actually need are registered somewhere on disk.
 echo "=== required node classes ==="
-for cls in ThreeWaySwitch ComfyUI_MinimaxH3HybridLoader MinimaxH3LatentUpscalerNode2D ModelPreviewOverrideKJ; do
+for cls in ThreeWaySwitch MiniMaxH3HybridLoader MinimaxH3LatentUpscalerNode2D ModelPreviewOverrideKJ; do
     if grep -rqs --include='*.py' "\"$cls\"\|'$cls'" /opt/ComfyUI/custom_nodes; then
         echo "  OK  $cls"
     elif grep -rqs --include='*.py' "\b$cls\b" /opt/ComfyUI/custom_nodes; then
