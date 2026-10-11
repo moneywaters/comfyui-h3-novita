@@ -42,6 +42,8 @@ fetch() {  # <subdir> <filename> <url> <min-bytes>
 H3=https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main
 QW=https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main
 SV=https://huggingface.co/numz/SeedVR2_comfyUI/resolve/main
+T8VG=https://huggingface.co/t8star/Qwen-Image-2.1-viggle-turbo-4step-r64-comfy/resolve/main
+T8PR=https://huggingface.co/t8star/Pruna-Qwen-Image-2.1-Comfy/resolve/main
 
 echo "=== PART=$PART ==="
 case "$PART" in
@@ -50,6 +52,8 @@ case "$PART" in
         "$H3/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" 20000000000
     ;;
   h3diff-ref2va)
+    # the Seed Hunter subgraph instance overrides its UNETLoader to ref2va,
+    # and ComfyUI_MinimaxH3HybridLoader uses it as the overlay, so this stays.
     fetch diffusion_models minimax_h3_ref2va_pruned_int8_convrot.safetensors \
         "$H3/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" 20000000000
     ;;
@@ -60,13 +64,16 @@ case "$PART" in
   h3aux)
     fetch vae minimax_h3_video_vae_int8_convrot.safetensors \
         "$H3/vae/minimax_h3_video_vae_int8_convrot.safetensors" 2700000000
+    # referenced by the Seed Hunter subgraph instance override
     fetch vae minimax_h3_video_vae_fp16.safetensors \
         "$H3/vae/minimax_h3_video_vae_fp16.safetensors" 5000000000
     fetch vae minimax_h3_audio_vae_fp32.safetensors \
         "$H3/vae/minimax_h3_audio_vae_fp32.safetensors" 500000000
-    # turbo speed-up LoRAs referenced by the shipped workflows / templates
     fetch loras minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors \
         "$H3/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors" 1800000000
+    ;;
+  h3loras)
+    # turbo speed-up LoRAs used by the MiniMax H3 video templates
     fetch loras minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors \
         "$H3/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors" 1800000000
     fetch loras minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors \
@@ -83,10 +90,23 @@ case "$PART" in
   qwen-enc)
     fetch text_encoders qwen3vl_8b_int8_convrot.safetensors \
         "$QW/text_encoders/qwen3vl_8b_int8_convrot.safetensors" 9000000000
-    fetch text_encoders qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors \
-        "$QW/text_encoders/qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors" 9000000000
+    # prompt-enhancer for i2i — only feeds a BYPASSED TextGenerate node
+    if [ "${WITH_PE:-0}" = "1" ]; then
+        fetch text_encoders qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors \
+            "$QW/text_encoders/qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors" 9000000000
+    else
+        echo "  skip prompt-enhancer (WITH_PE=0)"
+    fi
     fetch vae qwen_image_2.1_vae_bf16.safetensors \
         "$QW/vae/qwen_image_2.1_vae_bf16.safetensors" 600000000
+    ;;
+  qwen-loras)
+    # the workflow's LoRA filenames carry a "-t8" suffix; keep those exact names
+    # so ComfyUI validation passes on the workflow as shipped.
+    fetch loras qwen_image_2.1_viggle_turbo_v0.2.1_r256_comfy-t8.safetensors \
+        "$T8VG/qwen_image_2.1_viggle_turbo_v0.2.1_r256_comfy.safetensors" 1700000000
+    fetch loras p_qwen_image_2.1_8step_v0.1-comfyui-T8.safetensors \
+        "$T8PR/p_qwen_image_2.1_8step_v0.1-comfyui-T8.safetensors" 300000000
     ;;
   *) echo "ERROR: unknown PART '$PART'"; exit 1;;
 esac

@@ -31,6 +31,8 @@ clone https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod.git                  
 clone https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler.git           Comfyui_Minimax_h3_latent_Upscaler
 clone https://github.com/GACLove/ComfyUI-VFI.git                                     ComfyUI-VFI
 clone https://github.com/sepiablue-ai/ComfyUI-MiniMax-H3-W4A4-VSA.git                ComfyUI-MiniMax-H3-W4A4-VSA
+# merges fl2va (base) + ref2va (overlay) tensor groups -> needs BOTH diffusion models
+clone https://github.com/scottmudge/ComfyUI_MinimaxH3HybridLoader.git                ComfyUI_MinimaxH3HybridLoader
 
 # --- upscaling ---------------------------------------------------------------
 clone https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git      ComfyUI-SeedVR2_VideoUpscaler

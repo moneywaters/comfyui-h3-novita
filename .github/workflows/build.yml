@@ -11,19 +11,19 @@ on:
     inputs:
       parts:
         description: "JSON array of parts to build"
-        default: '["env","h3diff-fl2va","h3diff-ref2va","h3enc","h3aux","seedvr2"]'
+        default: '["env","h3diff-fl2va","h3diff-ref2va","h3enc","h3aux","h3loras","seedvr2","qwen-diff","qwen-enc","qwen-loras"]'
         required: true
       model_parts:
         description: "Comma-separated model parts, in final layer order"
-        default: "h3diff-fl2va,h3diff-ref2va,h3enc,h3aux,seedvr2"
+        default: "h3diff-fl2va,h3diff-ref2va,h3enc,h3aux,h3loras,seedvr2,qwen-diff,qwen-enc,qwen-loras"
+        required: true
+      with_pe:
+        description: "Include the Qwen prompt-enhancer model (1/0) — +9.5GB, only feeds a bypassed node"
+        default: "0"
         required: true
       torch_index:
         description: "PyTorch CUDA index"
         default: "cu130"
-        required: true
-      install_sage:
-        description: "Build SageAttention (1/0) — off by default, it OOM-kills small runners"
-        default: "0"
         required: true
 
 permissions:
@@ -84,7 +84,7 @@ jobs:
             --secret id=hf_token,src=/tmp/hf_token \
             --build-arg PART="${PART}" \
             --build-arg TORCH_INDEX="${{ inputs.torch_index }}" \
-            --build-arg INSTALL_SAGE="${{ inputs.install_sage }}" \
+            --build-arg WITH_PE="${{ inputs.with_pe }}" \
             --build-arg SSH_AUTHORIZED_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG6eQLbiJEo7wKVDj+1BswTpRJ2C8BU/hMFxhDYweS0n novita" \
             -t "${IMAGE}:part-${PART}" \
             -f "${{ steps.pick.outputs.dockerfile }}" .
