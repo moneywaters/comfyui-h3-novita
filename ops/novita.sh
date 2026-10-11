@@ -3,9 +3,11 @@
 #
 #   ./novita.sh clusters                     list clusters
 #   ./novita.sh products [4090|5090]         list products (spot price, stock, regions)
+#   ./novita.sh balance                      account credit
 #   ./novita.sh prewarm-list                 list prewarm tasks + quota
 #   ./novita.sh prewarm <image> <cluster>    create a prewarm task
 #   ./novita.sh prewarm-wait <taskId>        poll a prewarm task
+#   ./novita.sh deploy-wait <cluster> [prod] poll for 4090 spot capacity and create
 #   ./novita.sh instances                    list instances
 #   ./novita.sh create <cluster> <productId> create a spot instance running the image
 #   ./novita.sh status <instanceId>          instance status
@@ -70,6 +72,30 @@ print(ts[0].get('status') if ts else 'unknown')" 2>/dev/null)
       n=$((n+1)); sleep 15
     done
     echo "timeout"; exit 1
+    ;;
+
+  balance)
+    curl -s --max-time 25 "${AUTH[@]}" "https://api.novita.ai/openapi/v1/billing/balance/detail" | jqpy "
+for k in ('availableBalance','cashBalance','creditLimit','outstandingInvoices'):
+    v=d.get(k)
+    if v is not None: print(f'  {k:22s} \${int(v)/10000:.2f}')"
+    ;;
+
+  deploy-wait)
+    cluster="${2:?clusterId}"; want="${3:-4090}"
+    for i in $(seq 1 240); do
+      prods=$(curl -s --max-time 40 "${AUTH[@]}" "$B/products?clusterId=$cluster&gpuNum=1" | jqpy "
+print(' '.join(p['id'] for p in (d.get('data') or []) if '$want' in str(p.get('name','')) and p.get('availableDeploy')))" 2>/dev/null)
+      echo "[$(date +%H:%M:%S)] cycle $i deployable: ${prods:-none}"
+      for pid in $prods; do
+        resp=$(curl -s --max-time 90 -X POST "${AUTH[@]}" -d "{\"name\":\"h3-novita-test\",\"productId\":\"$pid\",\"gpuNum\":1,\"rootfsSize\":150,\"imageUrl\":\"$IMAGE\",\"ports\":\"22/tcp,8188/http\",\"kind\":\"gpu\",\"clusterId\":\"$cluster\",\"billingMode\":\"spot\",\"month\":0}" "$B/gpu/instance/create")
+        echo "   $pid -> $resp"
+        case "$resp" in *'"id"'*) echo "CREATED"; exit 0;; esac
+        sleep 20
+      done
+      sleep 60
+    done
+    echo "no capacity after retries"; exit 1
     ;;
 
   instances)

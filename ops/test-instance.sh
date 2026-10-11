@@ -65,6 +65,19 @@ python3 - "$API" "$WF" <<'PY' || FAIL=$((FAIL+1))
 import json, sys, time, urllib.request, urllib.error, os
 api, wf_path = sys.argv[1], sys.argv[2]
 wf = json.load(open(wf_path))
+
+# ComfyUI validates every node's inputs, including branches that the active
+# switch never executes. If the workflow references a LoRA that is not baked
+# into the image, repoint it at one that is (the branch is dead when switch=false,
+# so this changes nothing about the produced video).
+oi = json.load(urllib.request.urlopen(api + "/object_info/LoraLoaderModelOnly", timeout=120))
+avail = oi["LoraLoaderModelOnly"]["input"]["required"]["lora_name"][0]
+for nid, node in wf.items():
+    ins = node.get("inputs") or {}
+    if "lora_name" in ins and ins["lora_name"] not in avail:
+        print(f"  note: node {nid} lora {ins['lora_name']!r} not in image -> using {avail[0]!r}")
+        ins["lora_name"] = avail[0]
+
 print("  submitting", len(wf), "node workflow")
 
 def post(url, payload):
