@@ -29,9 +29,12 @@ for f in /opt/ComfyUI/user/default/workflows/*.json; do echo "    $(basename "$f
 echo "=== sshd ==="
 test -x /usr/sbin/sshd && echo "  OK sshd present" || { echo "  BAD sshd missing"; FAIL=$((FAIL+1)); }
 
+echo "=== ffmpeg ==="
+ffmpeg -hide_banner -version 2>/dev/null | head -1 || { echo "  BAD ffmpeg missing"; FAIL=$((FAIL+1)); }
+
 echo "=== model dirs ==="
-mkdir -p /opt/ComfyUI/models/{diffusion_models,text_encoders,vae,loras,SEEDVR2}
-ls -d /opt/ComfyUI/models/* | sed 's/^/  /'
+mkdir -p /opt/ComfyUI/models/{diffusion_models,text_encoders,vae,loras,loras/MINIMAX,latent_upscale_models,vae_approx,SEEDVR2}
+ls -d /opt/ComfyUI/models/*/ | sed 's/^/  /'
 
 echo
 if [ "$FAIL" -gt 0 ]; then echo "VERIFY-ENV FAILED ($FAIL)"; exit 1; fi

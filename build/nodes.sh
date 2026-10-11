@@ -33,9 +33,18 @@ clone https://github.com/GACLove/ComfyUI-VFI.git                                
 clone https://github.com/sepiablue-ai/ComfyUI-MiniMax-H3-W4A4-VSA.git                ComfyUI-MiniMax-H3-W4A4-VSA
 # merges fl2va (base) + ref2va (overlay) tensor groups -> needs BOTH diffusion models
 clone https://github.com/scottmudge/ComfyUI_MinimaxH3HybridLoader.git                ComfyUI_MinimaxH3HybridLoader
+# neural latent upscaler — required by Seed Hunter v2.5.1's upscale pass
+clone https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler.git           Comfyui_Minimax_h3_latent_Upscaler
 
 # --- upscaling ---------------------------------------------------------------
 clone https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git      ComfyUI-SeedVR2_VideoUpscaler
 
+echo "=== stripping VCS metadata + bytecode (image size) ==="
+find /opt/ComfyUI/custom_nodes -maxdepth 2 -name .git -type d -prune -exec rm -rf {} + 2>/dev/null || true
+find /opt/ComfyUI/custom_nodes -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+find /opt/ComfyUI/custom_nodes -name '*.pyc' -delete 2>/dev/null || true
+find /opt/ComfyUI/custom_nodes -maxdepth 2 \( -name 'examples' -o -name 'docs' -o -name '.github' \) -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
 echo "=== custom nodes present ==="
 ls -1
+du -sh /opt/ComfyUI/custom_nodes 2>/dev/null

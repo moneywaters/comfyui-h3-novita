@@ -1,8 +1,12 @@
-name: Build & push Novita image (split build)
+name: Build & push Novita images (split build)
 
-# A GitHub-hosted runner has ~43 GB free; the finished image is ~55 GB.  So the
-# image is built in independent parts (each <= ~25 GB), pushed to Docker Hub,
-# then stitched back into one image at the registry by ops/compose-image.py.
+# A GitHub-hosted runner has ~43 GB free, so each image is built in independent
+# parts (each <= ~25 GB), pushed to Docker Hub, then stitched back into one image
+# at the registry by ops/compose-image.py.
+#
+# Produces two images, because Novita caps a prewarm at 100 GB per image:
+#   moneywaters/comfyui-h3-novita     ~86 GB  H3 video generation (Seed Hunter v2.5.1)
+#   moneywaters/comfyui-qwen-novita   ~49 GB  Qwen 2.1 image editing (+ spare H3 variants)
 #
 # Required repository secrets: DOCKER_USER, DOCKER_PASS, HF_TOKEN
 
@@ -11,15 +15,7 @@ on:
     inputs:
       parts:
         description: "JSON array of parts to build"
-        default: '["env","h3diff-fl2va","h3diff-ref2va","h3enc","h3aux","h3loras","seedvr2","qwen-diff","qwen-enc","qwen-loras"]'
-        required: true
-      model_parts:
-        description: "Comma-separated model parts, in final layer order"
-        default: "h3diff-fl2va,h3diff-ref2va,h3enc,h3aux,h3loras,seedvr2,qwen-diff,qwen-enc,qwen-loras"
-        required: true
-      with_pe:
-        description: "Include the Qwen prompt-enhancer model (1/0) — +9.5GB, only feeds a bypassed node"
-        default: "0"
+        default: '["env","h3-fl2va","h3-singularity","h3enc","h3vae-kijai","h3vae-fp16","h3vae-audio","h3loras","h3extra","seedvr2","h3-ref2va-org","qwen-diff","qwen-enc","qwen-vae","qwen-loras"]'
         required: true
       torch_index:
         description: "PyTorch CUDA index"
@@ -28,6 +24,12 @@ on:
 
 permissions:
   contents: read
+
+env:
+  IMAGE_A: comfyui-h3-novita
+  IMAGE_B: comfyui-qwen-novita
+  PARTS_A: h3-fl2va,h3-singularity,h3enc,h3vae-kijai,h3vae-fp16,h3vae-audio,h3loras,h3extra,seedvr2
+  PARTS_B: qwen-diff,qwen-enc,qwen-vae,qwen-loras,h3-ref2va-org
 
 jobs:
   part:
@@ -79,12 +81,11 @@ jobs:
         run: |
           set -euo pipefail
           PART="${{ matrix.part }}"
-          IMAGE="docker.io/${{ secrets.DOCKER_USER }}/comfyui-h3-novita"
+          IMAGE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}"
           podman build --format docker \
             --secret id=hf_token,src=/tmp/hf_token \
             --build-arg PART="${PART}" \
             --build-arg TORCH_INDEX="${{ inputs.torch_index }}" \
-            --build-arg WITH_PE="${{ inputs.with_pe }}" \
             --build-arg SSH_AUTHORIZED_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG6eQLbiJEo7wKVDj+1BswTpRJ2C8BU/hMFxhDYweS0n novita" \
             -t "${IMAGE}:part-${PART}" \
             -f "${{ steps.pick.outputs.dockerfile }}" .
@@ -94,7 +95,7 @@ jobs:
       - name: Push part
         run: |
           set -euo pipefail
-          podman push "docker.io/${{ secrets.DOCKER_USER }}/comfyui-h3-novita:part-${{ matrix.part }}"
+          podman push "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:part-${{ matrix.part }}"
 
       - name: Cleanup token
         if: always()
@@ -107,26 +108,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compose final image at the registry
+      - name: Compose both images at the registry
         env:
-          MODEL_PARTS: ${{ inputs.model_parts }}
           DOCKER_USER: ${{ secrets.DOCKER_USER }}
           DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
         run: |
           set -euo pipefail
-          PARTS=""
-          for p in $(echo "$MODEL_PARTS" | tr ',' ' '); do
-            PARTS="${PARTS}${PARTS:+,}part-${p}"
-          done
-          echo "env=part-env parts=$PARTS"
-          python3 ops/compose-image.py \
-            --repo "${DOCKER_USER}/comfyui-h3-novita" \
-            --env part-env \
-            --parts "$PARTS" \
-            --out latest
+          prefix() { local out=""; for p in $(echo "$1" | tr ',' ' '); do out="${out}${out:+,}part-${p}"; done; echo "$out"; }
 
-      - name: Verify the composed image on Docker Hub
+          echo "### image A: ${IMAGE_A} (H3 video)"
+          python3 ops/compose-image.py --repo "${DOCKER_USER}/${IMAGE_A}" \
+            --env part-env --parts "$(prefix "$PARTS_A")" --out latest
+
+          echo "### image B: ${IMAGE_B} (Qwen 2.1)"
+          python3 ops/compose-image.py --repo "${DOCKER_USER}/${IMAGE_B}" \
+            --env part-env --parts "$(prefix "$PARTS_B")" --out latest
+
+      - name: Verify sizes are under the 100 GB prewarm cap
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
         run: |
           set -euo pipefail
-          curl -s --max-time 40 "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USER }}/comfyui-h3-novita/tags?page_size=10" > /tmp/tags.json
-          python3 -c "import json;d=json.load(open('/tmp/tags.json'));[print('  %-24s %.2f GB' % (t['name'], t.get('full_size',0)/1e9)) for t in d.get('results',[])]"
+          python3 ops/check-sizes.py \
+            "${DOCKER_USER}/${IMAGE_A}" \
+            "${DOCKER_USER}/${IMAGE_B}"
