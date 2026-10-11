@@ -53,17 +53,4 @@ jobs:
       - name: List resulting tags
         env:
           DOCKER_USER: ${{ secrets.DOCKER_USER }}
-        run: |
-          set -euo pipefail
-          curl -s --max-time 40 \
-            "https://hub.docker.com/v2/repositories/${DOCKER_USER}/${{ matrix.repo }}/tags?page_size=30" \
-            > /tmp/tags.json
-          python3 -c "
-import json
-d = json.load(open('/tmp/tags.json'))
-for t in d.get('results', []):
-    n = t['name']
-    if n.startswith('part-'):
-        continue
-    print(f\"  {n:<20} {t.get('full_size', 0)/1e9:8.2f} GB  {t.get('last_updated','')[:19]}\")
-"
+        run: python3 ops/list-tags.py "${DOCKER_USER}/${{ matrix.repo }}"
