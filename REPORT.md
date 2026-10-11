@@ -169,12 +169,13 @@ ComfyUI on the prewarmed cluster:
 ~/novita-comfy.sh stop       # delete the instance
 ```
 
-Defaults: cluster `us-ca-6` (US-CA-06), image `.../comfyui-h3-novita:v2.5.1`,
+Defaults: cluster `us-ca-6` (US-CA-06), image `.../comfyui-h3-novita:sha-260882616d3e`,
 name `seedhunter-prewarmed`, rootfs 200 GB, billing `auto` (spot, then on-demand).
 Override with `NOVITA_CLUSTER`, `NOVITA_IMAGE`, `NOVITA_BILLING`, `NOVITA_PRODUCT`,
 `NOVITA_INSTANCE_NAME`, `NOVITA_ROOTFS`, `NOVITA_NO_OPEN=1` (don't auto-open).
 
 Because US-CA-06 is prewarmed, `start` is near-instant — no 83 GB pull.
+The default image is the content tag `:sha-260882616d3e`.
 
 ## The stale-cache bug, and the fix
 
@@ -202,11 +203,26 @@ with the wrong content.
 
 The existing us-ca-6 prewarm runs on `:v2.5.1`, which is already immutable.
 
-> Outstanding: the content tags for the images published *before* this change could
-> not be minted yet — Docker Hub's **token endpoint** (`auth.docker.io`) is being
-> blocked by the local VPN right now (`registry-1.docker.io` answers, `auth.docker.io`
-> returns 000 both directly and through the proxy). The next `build.yml` run creates
-> the content tag automatically as part of compose.
+Content tags minted for the already-published images via `retag.yml` (run on a
+GitHub runner, because Docker Hub is unreachable from the dev Mac — see below):
+
+| image | tag | digest | size |
+|---|---|---|---|
+| `comfyui-h3-novita` | `sha-260882616d3e` | `sha256:260882616d3e…` | 83.00 GB / 57 layers |
+| `comfyui-qwen-novita` | `sha-827d623639cd` | `sha256:827d623639cd…` | 46.78 GB / 41 layers |
+
+Both were verified round-trip (PUT 201, re-read digest matches).
+
+### The cluster cache is keyed by REFERENCE, not digest
+
+Prewarming `:sha-260882616d3e` — the *same digest* as the already-prewarmed
+`:v2.5.1` — started a **full 83 GB re-pull**. So a prewarm is cached per image
+*reference* (tag), not per content digest. This is the whole explanation for the
+original bug: re-prewarming an existing tag name (`latest`) could leave the node's
+old layers in place, while the API reported `Succeeded`.
+
+**Policy:** prewarm exactly the reference you intend to deploy, and never rely on
+re-pushing an existing tag. Prefer the content tag, since it cannot be re-pointed.
 
 ## Prewarm state
 

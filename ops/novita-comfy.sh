@@ -9,7 +9,7 @@
 #
 # Overrides (env):
 #   NOVITA_API_KEY        API key                     (default from ops/novita.sh)
-#   NOVITA_IMAGE          image ref to run            (default .../comfyui-h3-novita:v2.5.1)
+#   NOVITA_IMAGE          image ref to run            (default .../comfyui-h3-novita:sha-260882616d3e)
 #   NOVITA_CLUSTER        cluster id                  (default us-ca-6, i.e. US-CA-06)
 #   NOVITA_INSTANCE_NAME  instance name to reuse/make (default seedhunter-prewarmed)
 #   NOVITA_ROOTFS         rootfs GB                   (default 200)
@@ -18,6 +18,9 @@
 #
 # Notes
 #  * US-CA-06 is prewarmed, so a start is near-instant (no 83 GB pull).
+#  * The default image is a CONTENT tag (sha-<digest12>). Prewarm/deploy cache is
+#    keyed per reference, and a re-pushed mutable tag can keep serving old layers,
+#    so pin the content tag the build prints rather than :latest.
 #  * `auto` tries spot first. In practice this account usually cannot allocate
 #    4090 spot (INSUFFICIENT_RESOURCE even when the API advertises inventory), so
 #    it falls through to on-demand, which is ~2x the price.
@@ -25,7 +28,7 @@ set -uo pipefail
 
 API_KEY="${NOVITA_API_KEY:-sk_-9UruuL5HS9S3lT0iStLtkFhTFxixkEd00zSPjI9tv8}"
 B="https://api.novita.ai/gpu-instance/openapi/v1"
-IMAGE="${NOVITA_IMAGE:-docker.io/moneywaters/comfyui-h3-novita:v2.5.1}"
+IMAGE="${NOVITA_IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-260882616d3e}"
 CLUSTER="${NOVITA_CLUSTER:-us-ca-6}"
 NAME="${NOVITA_INSTANCE_NAME:-seedhunter-prewarmed}"
 ROOTFS="${NOVITA_ROOTFS:-200}"
