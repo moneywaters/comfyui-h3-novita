@@ -72,9 +72,21 @@ with node names entirely from the baked models. Result:
 | Frames distinct | 124 per-frame sizes vary (`min≠max`), i.e. real motion |
 
 The run was reproduced independently over SSH by
-`.github/workflows/test-instance.yml` (GitHub runner, no local VPN).
+`.github/workflows/test-instance.yml` (GitHub runner, no local VPN):
+
+```
+=== 1. GPU ===     NVIDIA GeForce RTX 4090, driver 580.105.08, 24564 MiB
+=== 2. SSH ===     OK sshd listening on 22  |  OK inbound SSH session 172.20.0.1
+=== 3. ComfyUI === ComfyUI up after 1 tries
+=== 4. models ===  OK UNETLoader fl2va+ref2va · CLIPLoader qwen3vl_32b · VAELoader int8+fp16+audio
+                   OK LoraLoaderModelOnly minimax_h3_ref2v_turbo_4step_v0.1
+                   SEEDVR2: ema_vae_fp16, seedvr2_ema_3b_fp16
+=== 5. video ===   seed randomised -> MiniMax_H3_00002_.mp4 (0.81 MB, fresh, ~90s)
+INSTANCE TEST PASSED
+```
 
 Balance went $10.00 → $9.93 during the test.
+
 
 
 ## Notes / deviations
