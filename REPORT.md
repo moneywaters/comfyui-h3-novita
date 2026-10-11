@@ -1,134 +1,132 @@
-# Novita AI deployment report — comfyui-h3-novita
+# Novita AI — ComfyUI image, round 2 (Seed Hunter v2.5.1 + Qwen 2.1)
 
-## Objective
-Rebuild the Podman image containing the config UI (ComfyUI), models, nodes and
-workflows entirely inside the container; download models **at image-build time**
-(never onto the local machine); pre-warm the image in the Novita console; then
-rent a 4090 and confirm the pre-warmed image generates video.
+## Answer: does it all fit in 100 GB?
 
-## Artefacts
+**Not in one image — so it ships as two, both well under the cap.**
 
-| Thing | Value |
-|---|---|
-| GitHub repo (build) | `github.com/moneywaters/comfyui-h3-novita` (public) |
-| Image | `docker.io/moneywaters/comfyui-h3-novita:latest` |
-| Image size / layers | **84.35 GB / 42 layers**, linux/amd64 |
-| Prewarm task | `j44pvpgb53i41vep` — **Succeeded**, cluster `US-CA-06 (California)`, 205.8 min |
-| Instance | `44396e8c31f521f9` — RTX 4090 24GB, on-demand, `US-CA-06` |
-| ComfyUI URL | https://44396e8c31f521f9-8188.us-ca-6.gpu-instance.novita.ai |
-| SSH endpoint | `proxy.us-ca-6.gpu-instance.novita.ai:63842` |
+Novita caps a prewarm at **100 GB per image** ("the image pull quota limit per task is
+100 GB", [Image Prewarm → Quota Limits](https://docs.novita.ai/guides/gpu-image-prewarm)).
+The H3 side alone is 83.00 GB; adding Qwen 2.1 (19.39 GB) and the second ref2va model
+you asked to keep (20.97 GB) would make **123.36 GB**, so a single image is impossible
+without dropping models you said you want.
 
-## Build strategy (and why)
+No distro change was needed. What *was* reclaimed is 42 GB of models that Seed Hunter
+v2.5.1 no longer references (evidence: `SeedVR2` → 0 occurrences in the v2.5.1 JSON,
+`vae_name: minimax_h3_video_vae_fp16` → 0, `vae_name: …_int8_convrot` → 2,
+`unet_name: minimax_h3_fl2va_pruned_int8_convrot` → 1,
+`unet_name: Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8` → 1).
 
-The finished image is 84.35 GB, but a GitHub-hosted runner has only ~43 GB free
-(measured). Downloading models locally was explicitly forbidden and the local Mac
-has 20 GB free. So the image is built in **independent parts**, each small enough
-for a runner, then stitched back together **at the registry**:
+## The two images
 
-```
-env         10.35 GB  CUDA 13.0.1 + torch cu130 + ComfyUI + 18 custom node packs
-h3diff-fl2va 20.96 GB  MiniMax H3 fl2va pruned int8   (video workflow default)
-h3diff-ref2va 20.96 GB MiniMax H3 ref2va pruned int8  (Seed Hunter uses ref2va)
-h3enc       14.88 GB  qwen3vl-32b minimax h3 nvfp4 text encoder
-h3aux        9.91 GB  video VAE int8 + video VAE fp16 + audio VAE fp32 + 3 LoRAs
-seedvr2      7.29 GB  SeedVR2 3B fp16 + VAE
-```
+| | image A | image B |
+|---|---|---|
+| repo | `moneywaters/comfyui-h3-novita` | `moneywaters/comfyui-qwen-novita` |
+| size | **83.00 GB** / 57 layers | **46.78 GB** / 41 layers |
+| for | MiniMax H3 video (Seed Hunter v2.5.1) | Qwen-Image 2.1 editing |
+| extra | — | plus the spare Comfy-Org `ref2va` |
 
-`ops/compose-image.py` merges them: every part is built `FROM` the same
-`nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04`, so their leading 10 layers are
-byte-identical to the env image's. The composer drops that shared prefix on each
-part and appends only each part's **new** layers onto the env image's layer list,
-then PUTs the resulting manifest to the registry. Verified: config `36040 B`,
-manifest `7118 B`, 42 layers, `diff_ids` == layers, ENTRYPOINT/CMD and
-`22/tcp`+`8188/http` preserved.
+Both verified anonymously pullable (HTTP 200, exactly how the prewarm nodes fetch),
+`diff_ids == layers`, and `Entrypoint ["/usr/bin/tini","--"] / Cmd ["/opt/start.sh"] /
+ports 22+8188` intact through the compose step.
 
-Models are fetched in `build/models-part.sh` via `curl` with `HF_TOKEN` supplied
-as a BuildKit **secret**, so the token never lands in a layer.
+### Why the split falls here
+Image A holds **100 % of what the H3 workflow loads**, so it is the hot path and gets
+prewarmed. Image B holds Qwen plus two things that are valuable but *not* loaded by
+v2.5.1. Nothing requested was dropped: you get **both ref2va models** (Singularity in A,
+Comfy-Org in B) and **all the H3 VAEs plus taeh3** in A.
 
-## Results on the rented 4090
+## Model list
 
-- `nvidia-smi` / `system_stats`: **RTX 4090, 25.25 GB VRAM, 24.79 GB free**, 66.6 GB RAM
-- ComfyUI **0.37.0** serving on `:8188` (HTTP 200), `comfy-kitchen 0.2.35` loaded
-- Models resolvable through ComfyUI's own `object_info`:
-  - `UNETLoader`: `minimax_h3_fl2va_pruned_int8_convrot`, `minimax_h3_ref2va_pruned_int8_convrot`
-  - `CLIPLoader`: `qwen3vl_32b_minimax_h3_nvfp4_awq`
-  - `VAELoader`: `minimax_h3_video_vae_int8_convrot`, `minimax_h3_video_vae_fp16`, `minimax_h3_audio_vae_fp32`
-- sshd listening on 22 (container entrypoint starts sshd + ComfyUI together)
+### Image A — `moneywaters/comfyui-h3-novita:latest` (83.00 GB)
 
-### Video generation — verified end to end
+| size | file | source |
+|---|---|---|
+| — | env (torch cu130, ComfyUI 0.37.0, 21 node packs, workflows, sshd, ffmpeg) | — |
+| 20.97 | `diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors` | Comfy-Org/MiniMax-H3 |
+| 20.97 | `diffusion_models/Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors` | WarmBloodAban/Minimax-h3_Singularity |
+| 15.69 | `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | Comfy-Org/MiniMax-H3 |
+| 5.21 | `vae/minimax_h3_video_vae_fp16.safetensors` | Comfy-Org/MiniMax-H3 |
+| 3.17 | `vae/minimax_h3_video_vae_int8_convrot.safetensors` | **Kijai**/MiniMax-H3-experimental |
+| 0.60 | `vae/minimax_h3_audio_vae_fp32.safetensors` | Comfy-Org/MiniMax-H3 |
+| 0.37 | `loras/MINIMAX/minimax_h3_DMAD_4step_full_lora_avg_rank_39_bf16.safetensors` | **Kijai**/MiniMax-H3-experimental |
+| 0.77 | `loras/minimax_h3_fl2v_turbo_silver_dareties_comfy_pruned_v1.safetensors` | silveroxides/MiniMax-H3_tests |
+| 0.71 | `loras/minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro0975.safetensors` | silveroxides/…/ref2v_dareties |
+| 1.16 | `loras/minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro0995.safetensors` | silveroxides/…/ref2v_dareties |
+| 0.69 | `latent_upscale_models/minimax_h3_latent_upscaler_3d_conv_v1_fp16.safetensors` | LBH-123-AI/Minimax_h3_latent_Upscaler |
+| 0.01 | `vae_approx/taeh3.safetensors` | Kijai/MiniMax-H3-TAE |
+| 6.78 | `SEEDVR2/seedvr2_ema_3b_fp16.safetensors` | numz/SeedVR2_comfyUI |
+| 0.50 | `SEEDVR2/ema_vae_fp16.safetensors` | numz/SeedVR2_comfyUI |
+| **77.59** | weights subtotal (83.00 GB measured total) | |
 
-Submitted ComfyUI's API-format MiniMax H3 text-to-video graph via `POST /prompt`
-with node names entirely from the baked models. Result:
+### Image B — `moneywaters/comfyui-qwen-novita:latest` (46.78 GB)
 
-| Check | Evidence |
-|---|---|
-| Job | `prompt_id 1a1aa9f8-…`, status **success** |
-| Output | `video/MiniMax_H3_00001_.mp4`, 712215 bytes, downloaded HTTP 200 |
-| Container | `ISO Media, MP4 Base Media v1` (`ftypisom`, `isomiso2avc1mp41`) |
-| Duration | `mvhd` timescale 96000 / duration 496002 = **5.17 s** |
-| Video track | `avc1` (H.264), **124 samples** = 124 frames @24fps |
-| Resolution | **864×480** (0.415 MP), aspect 1.800 |
-| Audio track | `mp4a` (AAC), 163 samples — H3 generates synced audio |
-| Frames distinct | 124 per-frame sizes vary (`min≠max`), i.e. real motion |
+| size | file | source |
+|---|---|---|
+| — | env (same runtime layers as A) | — |
+| 20.97 | `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors` | Comfy-Org/MiniMax-H3 |
+| 9.35 | `text_encoders/qwen3vl_8b_int8_convrot.safetensors` | Comfy-Org/Qwen-Image-2.1 |
+| 7.26 | `diffusion_models/qwen_image_2.1_int8_convrot.safetensors` | Comfy-Org/Qwen-Image-2.1 |
+| 1.76 | `loras/qwen_image_2.1_viggle_turbo_v0.2.1_r256_comfy-t8.safetensors` | t8star/…-r64-comfy |
+| 0.67 | `vae/qwen_image_2.1_vae_bf16.safetensors` | Comfy-Org/Qwen-Image-2.1 |
+| 0.34 | `loras/p_qwen_image_2.1_8step_v0.1-comfyui-T8.safetensors` | t8star/Pruna-Qwen-Image-2.1-Comfy |
+| **40.35** | weights subtotal (46.78 GB measured total) | |
 
-The run was reproduced independently over SSH by
-`.github/workflows/test-instance.yml` (GitHub runner, no local VPN):
+Not baked: `qwen3.5_9b_qwen_image_2.1_pe_i2i` (9.47 GB) — its only consumer, `CLIPLoader`
+id 494, feeds a **bypassed** `TextGenerate` node (mode 4).
 
-```
-=== 1. GPU ===     NVIDIA GeForce RTX 4090, driver 580.105.08, 24564 MiB
-=== 2. SSH ===     OK sshd listening on 22  |  OK inbound SSH session 172.20.0.1
-=== 3. ComfyUI === ComfyUI up after 1 tries
-=== 4. models ===  OK UNETLoader fl2va+ref2va · CLIPLoader qwen3vl_32b · VAELoader int8+fp16+audio
-                   OK LoraLoaderModelOnly minimax_h3_ref2v_turbo_4step_v0.1
-                   SEEDVR2: ema_vae_fp16, seedvr2_ema_3b_fp16
-=== 5. video ===   seed randomised -> MiniMax_H3_00002_.mp4 (0.81 MB, fresh, ~90s)
-INSTANCE TEST PASSED
-```
+## What changed in the build
 
-Balance went $10.00 → $9.93 during the test.
+- **SageAttention removed.** Dense attention is ComfyUI core's "comfy kitchen attention"
+  (`ModelAttentionBackend` · 4 hits in v2.5.1); v2.5.1 has no `PathchSageAttentionKJ`
+  node at all, and the Qwen workflow's node 628 is set to `disabled`. This also removed
+  the need for a compiler.
+- **Runtime slimmed** (8.36 → 6.96 GB): no `build-essential` / `python3-dev` / `git-lfs`,
+  static BtbN ffmpeg instead of the apt package chain, `.git` + `__pycache__` + `examples/`
+  stripped from every cloned node, pip cache dropped.
+- **Nodes added:** `scottmudge/ComfyUI_MinimaxH3HybridLoader` (requested) and
+  `LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler` (required by v2.5.1).
+- **Workflows:** v2.5.1 installed as `Minimax_Seed_Hunter_v2.5.1.json`; the API test
+  repointed to the v2.5.1 set (Singularity + Kijai int8 VAE + DMAD LoRA, turbo path on).
+- **Composer:** cross-repo blob mounting (`uploads/?mount&from`) with a dual-scope token,
+  so image B inherits the base/env layers without re-uploading ~35 GB.
 
+## SSH — direct connect next time
 
+Root cause of the earlier failure: instance `44396e8c31f521f9` had been **deleted**
+(`/gpu/instances` → `total: 0`), so its endpoint answered nothing. The transport itself is
+fine — through Shadowrocket's HTTP CONNECT proxy (`127.0.0.1:1082`) the helper pulled a real
+SSH banner from `github.com:22` (`SSH-2.0-3bc2e72`) and echoed through `tcpbin.com:4242`.
 
-## Notes / deviations
+- `~/bin/http-connect-proxy` — speaks CONNECT itself, because BSD `nc -X connect` chokes on
+  `HTTP/1.1 200 Connection Established`
+- `ops/novita-ssh.sh <instanceId> [cmd]` — resolves the SSH `host:port` from the Novita API,
+  then sshs through the proxy (`--list` shows instances)
+- `~/.ssh/config`: `Host novita novita-*` stanza with `ProxyCommand http-connect-proxy %h %p`
 
-- **No US-CA-06 pre-warm before this task** — the earlier pre-warm list was
-  truncated by my own `head`, which made the cluster look absent. US-CA-06 exists
-  (id `us-ca-6`) and does host 4090s. Corrected.
-- **Spot was unavailable**: every 4090 spot `create` returned
-  `INSUFFICIENT_RESOURCE` even though the product list said `availableDeploy=true`.
-  Proven to be cluster capacity, not our image — a tiny `nvidia/cuda` image also
-  failed in `us-ca-6`. On-demand succeeded on the first attempt at $0.33/hr
-  (spot would be $0.17/hr). Account balance $10.00.
-- **Prewarm has no progress API.** The docs expose only
-  `Pending | Running | Succeeded | Failed`; there is no byte/percent field and no
-  per-task endpoint. `ops/prewarm-monitor.sh` polls state + elapsed instead.
-- **Docker Hub rate limiting was ruled out**: `x-ratelimit-limit: 100;w=3600`,
-  remaining 99. Only manifest requests count — one pull = 1 manifest + 42 blobs,
-  so >100 simultaneous nodes would be needed. The 205-minute prewarm is purely the
-  84.35 GB payload.
-- Running the job on GitHub's small runner **OOM-killed** the SageAttention
-  compile; it is therefore off by default (`install_sage=0`) and bounded
-  (`MAX_JOBS=1`, 2 archs, 40-min timeout) if enabled.
-- `curlimages/curl` is musl-linked, not static — model parts install `curl` via apt.
-- Pre-creating `/opt/ComfyUI` in the apt layer broke `git clone`; removed.
-- The two `fl2v` turbo LoRAs were added to `models-part.sh` *after* `h3aux` had
-  been built, so they are not in the current image. The shipped Seed Hunter
-  workflow uses `minimax_h3_ref2v_turbo_4step_v0.1`, which **is** present.
+## Prewarm — 5 clusters, US-CA-06 first, cheapest first
+
+| # | cluster | task | 4090 spot | state |
+|---|---|---|---|---|
+| 1 | `us-ca-6` — US-CA-06 (California) | `rcfnj3gxony894mm` | $0.17 | running |
+| 2 | `us-ca-nas-2` — US-CA-NAS-02 (California) | `jr9ahjamacrsdkqo` | $0.17 | running |
+| 3 | `us-dallas-nas-2` — US-Dallas-NAS-02 | `8t6f9bi9rpnlxwd6` | $0.335 | running |
+| 4 | `eu-ger-2` — EU-GER-02 (Germany) | `nlje4k92k1a4jhyq` | $0.17 | running |
+| 5 | `as-sgp-2` — AS-SGP-02 (Singapore) | `9fe9ss5jeghogxnt` | $0.17 | running |
+
+`us-ca-6` was created **first**, as asked. Two intended clusters (`2` US-CA-NAS-01 and `1`
+US-01 Dallas) rejected the prewarm with `CreateDockerImagePrewarm error`, so the last two
+slots went to other 4090 clusters. Quota is 5 of 5.
+
+Prewarm is 83 GB, which took ~3.4 h for the previous 84 GB image; expect similar here.
 
 ## Reproduce
 
 ```bash
-# build (per-part, parallel) + compose + push
-gh workflow run build.yml -R moneywaters/comfyui-h3-novita \
-  -f parts='["env","h3diff-fl2va","h3diff-ref2va","h3enc","h3aux","seedvr2"]' \
-  -f model_parts='h3diff-fl2va,h3diff-ref2va,h3enc,h3aux,seedvr2' \
-  -f torch_index=cu130 -f install_sage=0
+gh workflow run build.yml -R moneywaters/comfyui-h3-novita -f torch_index=cu130
 
-# prewarm in the 4090 cluster, then watch
-ops/novita.sh prewarm docker.io/moneywaters/comfyui-h3-novita:latest us-ca-6
+ops/novita.sh prewarm docker.io/moneywaters/comfyui-h3-novita:latest us-ca-6   # and 4 more
 ops/prewarm-monitor.sh
 
-# deploy + verify
-ops/novita.sh balance
-ops/novita.sh deploy-wait us-ca-6 4090     # spot; use create for on-demand
+ops/novita-ssh.sh --list
+ops/novita-ssh.sh <instanceId> nvidia-smi
 ```

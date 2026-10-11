@@ -56,8 +56,10 @@ def _basic_auth():
     return None
 
 
-def get_token(repo, actions="pull,push"):
-    url = f"{AUTH}?service=registry.docker.io&scope=repository:{repo}:{actions}"
+def get_token(repo, actions="pull,push", extra_scopes=None):
+    scopes = [f"repository:{repo}:{actions}"] + list(extra_scopes or [])
+    q = "&".join("scope=" + urllib.parse.quote(s, safe=":,/") for s in scopes)
+    url = f"{AUTH}?service=registry.docker.io&{q}"
     basic = _basic_auth()
     for attempt in range(5):
         try:
@@ -112,6 +114,24 @@ def resolve_manifest(repo, ref):
     return m, mt
 
 
+def mount_blob(repo, digest, from_repo, token):
+    """Cross-repo mount an existing blob (Docker Hub: POST uploads/?mount&from).
+
+    Returns True when the registry answers 201 Created, meaning the blob is now
+    present in `repo` without re-uploading it.
+    """
+    q = urllib.parse.quote(digest, safe=":")
+    src = urllib.parse.quote(from_repo, safe="/")
+    url = f"{REG}/v2/{repo}/blobs/uploads/?mount={q}&from={src}"
+    try:
+        st, _, _ = request(url, token, method="POST", data=b"",
+                           ctype="application/octet-stream")
+    except RuntimeError as e:
+        log(f"    mount error {digest[:19]}: {e}")
+        return False
+    return st == 201
+
+
 def get_blob_json(repo, digest):
     token = get_token(repo, "pull")
     st, hdrs, body = request(f"{REG}/v2/{repo}/blobs/{digest}", token)
@@ -124,10 +144,11 @@ def layer_size(entry):
 
 def compose(args):
     repo = args.repo
+    parts_repo = args.parts_repo or repo
 
     log("== resolving env image ==")
-    env_m, env_mt = resolve_manifest(repo, args.env)
-    env_c = get_blob_json(repo, env_m["config"]["digest"])
+    env_m, env_mt = resolve_manifest(parts_repo, args.env)
+    env_c = get_blob_json(parts_repo, env_m["config"]["digest"])
     env_layers = env_m["layers"]
     env_diff = env_c["rootfs"]["diff_ids"]
     env_hist = env_c["history"]
@@ -148,8 +169,8 @@ def compose(args):
 
     for part in args.parts:
         log(f"== part {part} ==")
-        m, mt = resolve_manifest(repo, part)
-        c = get_blob_json(repo, m["config"]["digest"])
+        m, mt = resolve_manifest(parts_repo, part)
+        c = get_blob_json(parts_repo, m["config"]["digest"])
         if len(m["layers"]) < N:
             raise RuntimeError(f"{part}: fewer layers ({len(m['layers'])}) than base ({N})")
         new_layers = m["layers"][N:]
@@ -209,6 +230,21 @@ def compose(args):
         log("dry-run: not pushing")
         return 0
 
+    # When composing into a repo that does not already hold the base/env blobs,
+    # cross-repo mount them instead of re-uploading gigabytes.
+    if parts_repo != repo:
+        log(f"== mounting blobs from {parts_repo} ==")
+        # the token must carry pull on the SOURCE repo as well as push on the target
+        token = get_token(repo, "pull,push",
+                          extra_scopes=[f"repository:{parts_repo}:pull"])
+        mounted = missing = 0
+        for l in final_layers:
+            if mount_blob(repo, l["digest"], parts_repo, token):
+                mounted += 1
+            else:
+                missing += 1
+        log(f"  mounted {mounted} blob(s); {missing} not mountable")
+
     log("== pushing config blob ==")
     token = get_token(repo, "pull,push")
     st, hdrs, _ = request(f"{REG}/v2/{repo}/blobs/uploads/", token, method="POST",
@@ -244,6 +280,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True)
     ap.add_argument("--env", required=True)
+    ap.add_argument("--parts-repo", default=None,
+                    help="repo holding the part-* tags (defaults to --repo)")
     ap.add_argument("--parts", required=True,
                     help="comma-separated part tags/digests, in layer order")
     ap.add_argument("--out", default="latest")
