@@ -43,6 +43,7 @@ log "--- verify ---"
 rc=0
 # --- files that had to be fetched -------------------------------------------
 for f in \
+  "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" \
   "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" \
   "vae/minimax_h3_video_vae_int8_convrot.safetensors" \
   "loras/minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro0995.safetensors" \
@@ -68,9 +69,35 @@ for f in \
     if [ -e "$p" ]; then log "  OK      (pre-existing) $f"; else log "  MISSING (pre-existing) $f"; rc=1; fi
 done
 
-log "note: the workflow was remapped onto the existing ref2va;"
-log "      'Singularity ref2va' and 'fl2va' both now point at"
-log "      minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+# 5. now that fl2va exists, restore the subgraph's UNETLoader default to it so the
+#    graph matches upstream again. The live subgraph INSTANCE (node 171) still
+#    overrides unet_name at execution time, so this changes what runs: nothing.
+WF="$HOME/ComfyUI/user/default/workflows/Minimax_Seed_Hunter_v2.5.1.json"
+FL2VA="$MODELS/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+if [ -f "$FL2VA" ] && [ -f "$WF" ]; then
+    cp -n "$WF" "$WF.bak.pref2va" 2>/dev/null || true
+    python3 - "$WF" <<'PYX'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+FL2VA = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+n = 0
+for s in (d.get('definitions', {}) or {}).get('subgraphs', []) or []:
+    for node in s.get('nodes', []):
+        if node.get('type') == 'UNETLoader':
+            for key in ('widgets_values', 'widgets_values_named'):
+                v = node.get(key)
+                if isinstance(v, list) and v and isinstance(v[0], str) and v[0].endswith('.safetensors'):
+                    v[0] = FL2VA; n += 1
+                if isinstance(v, dict) and 'unet_name' in v:
+                    v['unet_name'] = FL2VA; n += 1
+json.dump(d, open(p, 'w'), indent=1, ensure_ascii=False)
+print(f"  restored fl2va in {n} subgraph UNETLoader field(s)")
+PYX
+    log "restored the subgraph UNETLoader default to fl2va (upstream fidelity)"
+else
+    log "fl2va not present yet; subgraph default left as ref2va"
+fi
 
 [ $rc -eq 0 ] && log "=== all v2.5.1 model files present ===" || log "=== some files still missing ==="
 log "free space: $(df -h /mnt/data | awk 'NR==2{print $4}')"

@@ -147,13 +147,19 @@ hybrid; ref2va adds reference conditioning. With only one H3 diffusion model pre
 hybrid path is unavailable. If you want it later, the single missing piece is
 `minimax_h3_fl2va_pruned_int8_convrot.safetensors` (20.97 GB).
 
-### Still downloading (as instructed: small files kept)
-| file | size |
-|---|---|
-| `loras/minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro0995.safetensors` | 1.16 GB |
-| `vae/minimax_h3_video_vae_int8_convrot.safetensors` (Kijai) | 3.17 GB |
+### Fetch status
 
-Already fetched: `taeh3.safetensors` (9 MB), `loras/MINIMAX/minimax_h3_DMAD_4step_..._bf16` (350 MB).
+| file | size | state |
+|---|---|---|
+| `vae_approx/taeh3.safetensors` | 9 MB | fetched |
+| `loras/MINIMAX/minimax_h3_DMAD_4step_..._bf16.safetensors` | 350 MB | fetched |
+| `loras/minimax_h3_ref2v_..._dareties_fro0995.safetensors` | 1.16 GB | fetched |
+| `vae/minimax_h3_video_vae_int8_convrot.safetensors` (Kijai) | 3.17 GB | fetched |
+| **`diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors`** | **20.97 GB** | **downloading (~2.53 MB/s, ETA ~2h16m)** |
+
+Once fl2va lands, `finalize-v251.sh` restores the subgraph's `UNETLoader` default to fl2va
+(upstream fidelity) and re-links. The live subgraph instance (node 171) keeps pointing at
+ref2va, so which model actually runs is unchanged.
 
 ## Reproduce
 

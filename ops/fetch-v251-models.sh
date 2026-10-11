@@ -61,6 +61,14 @@ say "target: $(du -sh "$ROOT" 2>/dev/null | cut -f1) used | $(df -h /mnt/data | 
 : > "$LOG"
 
 # small first, so the LoRA / upscale / preview path works sooner
+# --- the one genuinely missing H3 diffusion model -----------------------------
+# fl2va is the higher-quality first/last-keyframe half of the H3 pair, and the base
+# that MiniMaxH3HybridLoader merges ref2va onto. The workflow's subgraph default
+# points at it, so it must exist for the graph to validate against upstream.
+fetch "Comfy-Org/MiniMax-H3" \
+      "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" \
+      "diffusion_models"
+
 fetch "Kijai/MiniMax-H3-TAE" \
       "vae_approx/taeh3.safetensors" \
       "vae_approx"
