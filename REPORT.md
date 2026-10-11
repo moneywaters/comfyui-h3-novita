@@ -228,7 +228,7 @@ re-pushing an existing tag. Prefer the content tag, since it cannot be re-pointe
 ### Build determinism
 
 Re-running the build with an unchanged image definition produced a **different
-manifest digest** (`sha-144f9ad28217` then `sha-b300518d0c68`; same 57 layers, same
+manifest digest** (`sha-289174e82568` then `sha-b300518d0c68`; same 57 layers, same
 83.00 GB, config blob 46112 B vs 46109 B). Podman records `created` timestamps in the
 config, so a rebuild is never byte-identical. Consequence: **every env rebuild
 produces a new content tag, which invalidates the prewarm** — budget a re-prewarm
@@ -250,7 +250,7 @@ Current tags:
 
 | image | content tag | digest | size |
 |---|---|---|---|
-| `comfyui-h3-novita` | `sha-144f9ad28217` | `sha256:144f9ad28217…` | 83.00 GB / 57 layers |
+| `comfyui-h3-novita` | `sha-289174e82568` | `sha256:144f9ad28217…` | 83.00 GB / 57 layers |
 | `comfyui-qwen-novita` | `sha-bbf34a62c728` | `sha256:bbf34a62c728…` | 46.78 GB / 41 layers |
 
 ### Shadowrocket must be ON to reach Novita
@@ -280,7 +280,7 @@ workflow supplied at** `/Users/asan/Downloads/minimaxH3SEEDHUNTERLatent_v251.jso
 (md5 `62a802dd3d19f293e15d144dde09c5c7`) and is the version consistent with image A.
 It has been restored.
 
-Verified on image `sha-144f9ad28217`:
+Verified on image `sha-289174e82568`:
 
 * all 53 workflow node types resolve — `ThreeWaySwitch` included, 0 missing
 * `taeh3.safetensors` is in `models/vae_approx/` (from the `h3extra` part)
