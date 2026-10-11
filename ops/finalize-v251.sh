@@ -38,12 +38,12 @@ fi
 log "--- link-models.sh ---"
 "$HOME/bin/link-models.sh" link 2>&1 | tail -12 | tee -a "$LOG"
 
-# 4. verify the six files the workflow needs
+# 4. verify the model files the (remapped) workflow needs
 log "--- verify ---"
 rc=0
+# --- files that had to be fetched -------------------------------------------
 for f in \
-  "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" \
-  "diffusion_models/Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors" \
+  "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" \
   "vae/minimax_h3_video_vae_int8_convrot.safetensors" \
   "loras/minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro0995.safetensors" \
   "loras/MINIMAX/minimax_h3_DMAD_4step_full_lora_avg_rank_39_bf16.safetensors" \
@@ -57,17 +57,20 @@ for f in \
         log "  MISSING  $f"; rc=1
     fi
 done
-# the pre-existing pieces the workflow also loads
+# --- pre-existing files the workflow also loads ------------------------------
 for f in \
   "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors" \
   "vae/minimax_h3_video_vae_fp16.safetensors" \
   "vae/minimax_h3_audio_vae_fp32.safetensors" \
   "latent_upscale_models/minimax_h3_latent_upscaler_3d_conv_v1_fp16.safetensors" \
-  "loras/minimax_h3_fl2v_turbo_silver_dareties_comfy_pruned_v1.safetensors" \
-  "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" ; do
+  "loras/minimax_h3_fl2v_turbo_silver_dareties_comfy_pruned_v1.safetensors" ; do
     p="$MODELS/$f"
     if [ -e "$p" ]; then log "  OK      (pre-existing) $f"; else log "  MISSING (pre-existing) $f"; rc=1; fi
 done
+
+log "note: the workflow was remapped onto the existing ref2va;"
+log "      'Singularity ref2va' and 'fl2va' both now point at"
+log "      minimax_h3_ref2va_pruned_int8_convrot.safetensors"
 
 [ $rc -eq 0 ] && log "=== all v2.5.1 model files present ===" || log "=== some files still missing ==="
 log "free space: $(df -h /mnt/data | awk 'NR==2{print $4}')"

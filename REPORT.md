@@ -119,6 +119,42 @@ slots went to other 4090 clusters. Quota is 5 of 5.
 
 Prewarm is 83 GB, which took ~3.4 h for the previous 84 GB image; expect similar here.
 
+
+## Model substitutions — Seed Hunter v2.5.1
+
+The workflow shipped referencing a 21 GB fine-tune and a 21 GB fl2va model. The server
+already had Comfy-Org's **ref2va pruned int8**, so both references were remapped onto it
+instead of downloading 42 GB more.
+
+| workflow reference | size | replaced with | why |
+|---|---|---|---|
+| `Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors` | 20.97 GB | `minimax_h3_ref2va_pruned_int8_convrot.safetensors` (**already on the server**) | Singularity is a *fine-tune of ref2va*; same architecture, same int8-convrot quantisation, same pruned shape. This is a true analog. |
+| `minimax_h3_fl2va_pruned_int8_convrot.safetensors` | 20.97 GB | same existing ref2va file | **no fl2va exists on the server.** Pointed at ref2va so the graph validates and runs. |
+
+Two nodes were remapped (ComfyUI reads `widgets_values_named`, not `widgets_values` —
+missing that dict is why the first attempt silently did nothing):
+1. node 171, the *live* "Load Models & Patches" subgraph instance — this is the one that runs
+2. the subgraph definition's `UNETLoader` default — still validated by ComfyUI even though
+   the instance overrides it
+
+Verified after the change: **0 functional references to either missing file**, 13 references
+to the existing ref2va.
+
+### Consequence worth knowing
+fl2va is trained for first/last-keyframe conditioning and is the higher-quality half of the
+hybrid; ref2va adds reference conditioning. With only one H3 diffusion model present, the
+`MiniMaxH3HybridLoader` node (fl2va base + ref2va overlay) has nothing to merge, so that
+hybrid path is unavailable. If you want it later, the single missing piece is
+`minimax_h3_fl2va_pruned_int8_convrot.safetensors` (20.97 GB).
+
+### Still downloading (as instructed: small files kept)
+| file | size |
+|---|---|
+| `loras/minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro0995.safetensors` | 1.16 GB |
+| `vae/minimax_h3_video_vae_int8_convrot.safetensors` (Kijai) | 3.17 GB |
+
+Already fetched: `taeh3.safetensors` (9 MB), `loras/MINIMAX/minimax_h3_DMAD_4step_..._bf16` (350 MB).
+
 ## Reproduce
 
 ```bash

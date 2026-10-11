@@ -51,6 +51,11 @@ fetch() {
     return $rc
 }
 
+# NOTE: the two 21 GB diffusion models are deliberately NOT fetched.
+# The server already has Comfy-Org's minimax_h3_ref2va_pruned_int8_convrot, and the
+# workflow was remapped onto it (Singularity ref2va and fl2va both -> that file).
+# See REPORT.md "model substitutions".
+
 say "==== v2.5.1 model fetch starting ===="
 say "target: $(du -sh "$ROOT" 2>/dev/null | cut -f1) used | $(df -h /mnt/data | awk 'NR==2{print $4}') free"
 : > "$LOG"
@@ -71,15 +76,6 @@ fetch "silveroxides/MiniMax-H3_tests" \
 fetch "Kijai/MiniMax-H3-experimental" \
       "minimax_h3_video_vae_int8_convrot.safetensors" \
       "vae"
-
-# the two 21 GB diffusion models
-fetch "Comfy-Org/MiniMax-H3" \
-      "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" \
-      "diffusion_models"
-
-fetch "WarmBloodAban/Minimax-h3_Singularity" \
-      "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors" \
-      "diffusion_models"
 
 say "==== v2.5.1 model fetch finished ===="
 say "free space now: $(df -h /mnt/data | awk 'NR==2{print $4}')"
