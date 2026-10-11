@@ -54,7 +54,28 @@ as a BuildKit **secret**, so the token never lands in a layer.
   - `CLIPLoader`: `qwen3vl_32b_minimax_h3_nvfp4_awq`
   - `VAELoader`: `minimax_h3_video_vae_int8_convrot`, `minimax_h3_video_vae_fp16`, `minimax_h3_audio_vae_fp32`
 - sshd listening on 22 (container entrypoint starts sshd + ComfyUI together)
-- Live MiniMax H3 text-to-video submitted through `POST /prompt`
+
+### Video generation — verified end to end
+
+Submitted ComfyUI's API-format MiniMax H3 text-to-video graph via `POST /prompt`
+with node names entirely from the baked models. Result:
+
+| Check | Evidence |
+|---|---|
+| Job | `prompt_id 1a1aa9f8-…`, status **success** |
+| Output | `video/MiniMax_H3_00001_.mp4`, 712215 bytes, downloaded HTTP 200 |
+| Container | `ISO Media, MP4 Base Media v1` (`ftypisom`, `isomiso2avc1mp41`) |
+| Duration | `mvhd` timescale 96000 / duration 496002 = **5.17 s** |
+| Video track | `avc1` (H.264), **124 samples** = 124 frames @24fps |
+| Resolution | **864×480** (0.415 MP), aspect 1.800 |
+| Audio track | `mp4a` (AAC), 163 samples — H3 generates synced audio |
+| Frames distinct | 124 per-frame sizes vary (`min≠max`), i.e. real motion |
+
+The run was reproduced independently over SSH by
+`.github/workflows/test-instance.yml` (GitHub runner, no local VPN).
+
+Balance went $10.00 → $9.93 during the test.
+
 
 ## Notes / deviations
 

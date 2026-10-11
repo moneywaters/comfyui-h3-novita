@@ -13,8 +13,16 @@ nvidia-smi || { echo "BAD: nvidia-smi failed"; FAIL=$((FAIL+1)); }
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader || true
 
 echo "=================== 2. SSH ==================="
-ss -lntp 2>/dev/null | grep -E ':22\b' && echo "  OK sshd listening" || { echo "  BAD sshd not listening"; FAIL=$((FAIL+1)); }
-whoami; echo "host: $(hostname)"
+# iproute2 is not installed in the image, so check the listening socket with a
+# bash builtin instead of `ss`/`netstat`.
+if (exec 3<>/dev/tcp/127.0.0.1/22) 2>/dev/null; then
+    echo "  OK sshd listening on 22 (/dev/tcp connect succeeded)"
+    exec 3>&- 2>/dev/null || true
+else
+    echo "  BAD sshd not listening on 22"; FAIL=$((FAIL+1))
+fi
+if [ -n "${SSH_CONNECTION:-}" ]; then echo "  OK inbound SSH session: ${SSH_CONNECTION}"; fi
+echo "  user: $(whoami)  host: $(hostname)"
 
 echo "=================== 3. ComfyUI ==================="
 for i in $(seq 1 90); do
@@ -40,7 +48,13 @@ want = {
     ("VAELoader", "vae_name"): ["minimax_h3_video_vae_int8_convrot.safetensors",
                                 "minimax_h3_video_vae_fp16.safetensors",
                                 "minimax_h3_audio_vae_fp32.safetensors"],
-    ("LoraLoaderModelOnly", "lora_name"): ["minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"],
+    # the Seed Hunter workflow's turbo LoRA — required
+    ("LoraLoaderModelOnly", "lora_name"): ["minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"],
+}
+# only used by the stock ComfyUI t2v template's turbo branch — informational
+OPTIONAL = {
+    ("LoraLoaderModelOnly", "lora_name"): ["minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+                                          "minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors"],
 }
 bad = 0
 for (node, key), expect in want.items():
@@ -52,6 +66,10 @@ for (node, key), expect in want.items():
         ok = f in opts
         print(f"  {'OK ' if ok else 'BAD'} {node}: {f}")
         if not ok: bad += 1
+for (node, key), expect in OPTIONAL.items():
+    opts = oi[node]["input"]["required"][key][0]
+    for f in expect:
+        print(f"  {'ok ' if f in opts else '-- '} (optional) {node}: {f}")
 # SeedVR2 is discovered by the SeedVR2 node pack, not core object_info
 import subprocess
 sv = subprocess.run(["bash","-lc","ls -1 /opt/ComfyUI/models/SEEDVR2 2>/dev/null"],capture_output=True,text=True).stdout.split()
@@ -77,6 +95,13 @@ for nid, node in wf.items():
     if "lora_name" in ins and ins["lora_name"] not in avail:
         print(f"  note: node {nid} lora {ins['lora_name']!r} not in image -> using {avail[0]!r}")
         ins["lora_name"] = avail[0]
+
+# Randomise the noise seed so this is a genuine generation, not a cache hit.
+import random
+for nid, node in wf.items():
+    if node.get("class_type") == "RandomNoise":
+        node["inputs"]["noise_seed"] = random.randrange(1, 2**31)
+print("  randomise seeds:", [n for n, v in wf.items() if v.get("class_type") == "RandomNoise"])
 
 print("  submitting", len(wf), "node workflow")
 
@@ -130,11 +155,15 @@ outdir = "/opt/ComfyUI/output"
 ok = 0
 for nid, kind, sub, fn, typ in found:
     p = os.path.join(outdir, sub, fn)
-    sz = os.path.getsize(p) if os.path.exists(p) else -1
-    print(f"  OUTPUT {kind}: {p} ({sz/1e6:.2f} MB)")
-    if sz > 100_000 and (fn.endswith(".mp4") or fn.endswith(".webm") or fn.endswith(".png")):
+    if not os.path.exists(p):
+        print(f"  BAD missing output file: {p}"); continue
+    sz = os.path.getsize(p)
+    age = time.time() - os.path.getmtime(p)
+    fresh = age < (time.time() - t0) + 60   # written during this run
+    print(f"  OUTPUT {kind}: {p} ({sz/1e6:.2f} MB, age {age:.0f}s, fresh={fresh})")
+    if sz > 100_000 and fresh and (fn.endswith(".mp4") or fn.endswith(".webm") or fn.endswith(".png")):
         ok += 1
-print("  valid outputs:", ok)
+print("  valid fresh outputs:", ok)
 sys.exit(0 if ok else 1)
 PY
 
