@@ -63,7 +63,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True)
     ap.add_argument("--from", dest="src", required=True)
-    ap.add_argument("--to", dest="dst", required=True)
+    ap.add_argument("--to", dest="dst", required=True,
+                    help="target tag, or 'auto' to derive sha-<first12 of manifest digest>")
     a = ap.parse_args()
 
     t = token(a.repo, "pull")
@@ -74,6 +75,13 @@ def main():
         mt = (r.headers.get("Content-Type") or "").split(";")[0].strip()
         digest = r.headers.get("Docker-Content-Digest") or ""
     m = json.loads(raw)
+
+    if a.dst == "auto":
+        if not digest:
+            log("  no Docker-Content-Digest header; cannot derive a tag")
+            return 1
+        a.dst = "sha-" + digest.split(":", 1)[1][:12]
+        log(f"  --to auto -> {a.dst}")
 
     if "manifests" in m:
         log("  source is a multi-arch index; copying the index as-is")
