@@ -121,7 +121,10 @@ jobs:
             --env part-env --parts "$(prefix "$PARTS_A")" --out latest
 
           echo "### image B: ${IMAGE_B} (Qwen 2.1)"
+          # every part (including this image's own qwen-* parts) is pushed to the
+          # IMAGE_A repo, so B must resolve its parts from there too.
           python3 ops/compose-image.py --repo "${DOCKER_USER}/${IMAGE_B}" \
+            --parts-repo "${DOCKER_USER}/${IMAGE_A}" \
             --env part-env --parts "$(prefix "$PARTS_B")" --out latest
 
       - name: Verify sizes are under the 100 GB prewarm cap
