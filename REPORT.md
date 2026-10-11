@@ -292,6 +292,45 @@ Verified on image `sha-144f9ad28217`:
 > multipart upload returns 200 but saves the MIME preamble, producing invalid JSON
 > and a silent 235-byte bloat.
 
+
+## The UI stuck on the "Comfy" logo
+
+**Symptom.** The web UI shows the ComfyUI logo forever and never becomes usable, on
+every instance, direct or tunnelled, regardless of image.
+
+**Investigation.** Driving Orca's embedded browser against the page and reading the
+console plus the network log:
+
+* the server is fine — `/extensions` answers in ~10 ms, `/object_info` in ~0.6 s, and
+  every one of the 319 extension scripts serves in 1-2 ms when fetched on the box
+* the transport is lossy over a remote proxy: fetching all 318 extension files at
+  browser-like concurrency took 155 s with **14 hard failures** (4.4%), and the
+  browser does not retry a failed `<script>`
+* the app **is** mounted under the overlay: `#vue-app` has children, `window.app`
+  exists, the graph is initialised, and the canvas renders at ~60 FPS
+* removing `#splash-loader` by hand reveals a complete, working ComfyUI
+
+**Root cause.** The frontend removes the splash only when the extension store's
+`spinner` flag goes true -> false. From the entry bundle:
+
+```js
+let t = H(), r = a(() => t.spinner)
+oe(r, (e, t) => { t && !e && document.getElementById('splash-loader')?.remove() },
+   { flush: 'post' })
+```
+
+If any extension script fails to load, the flag never clears, so a fully functional
+UI stays covered by the loading overlay.
+
+**Fix.** `build/patch-frontend.sh` rewrites the `#splash-loader` rule in
+`comfyui_frontend_package/static/index.html` to `display:none!important` (-105 bytes).
+It is tolerant of a frontend that has no splash at all and fails loudly if the rule
+exists but cannot be matched. `verify-env.sh` asserts the patch is present, so the
+build breaks rather than shipping a UI that can hang on the logo.
+
+Not affected by this: the API, the WebSocket (works over HTTP/1.1), workflow
+execution, or image contents. This is purely the loading overlay.
+
 ## Prewarm state
 
 | cluster | image | state |

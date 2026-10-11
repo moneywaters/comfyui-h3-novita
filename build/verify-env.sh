@@ -43,6 +43,18 @@ for f in /opt/ComfyUI/user/default/workflows/*.json; do echo "    $(basename "$f
 echo "=== sshd ==="
 test -x /usr/sbin/sshd && echo "  OK sshd present" || { echo "  BAD sshd missing"; FAIL=$((FAIL+1)); }
 
+echo "=== splash disabled ==="
+SPLASH_HTML=$(ls /opt/comfyui-venv/lib/python*/site-packages/comfyui_frontend_package/static/index.html 2>/dev/null | head -1)
+if [ -z "$SPLASH_HTML" ]; then
+    echo "  BAD frontend index.html not found"; FAIL=$((FAIL+1))
+elif grep -q '#splash-loader{display:none!important}' "$SPLASH_HTML"; then
+    echo "  OK splash overlay disabled"
+elif ! grep -q '#splash-loader' "$SPLASH_HTML"; then
+    echo "  OK no splash overlay in this frontend build"
+else
+    echo "  BAD splash still enabled (a shell wrapper can keep the UI stuck on the logo)"; FAIL=$((FAIL+1))
+fi
+
 echo "=== ffmpeg ==="
 ffmpeg -hide_banner -version 2>/dev/null | head -1 || { echo "  BAD ffmpeg missing"; FAIL=$((FAIL+1)); }
 
