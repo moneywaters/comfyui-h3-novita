@@ -333,12 +333,34 @@ execution, or image contents. This is purely the loading overlay.
 
 ## Prewarm state
 
-| cluster | image | state |
-|---|---|---|
-| `us-ca-6` — US-CA-06 (California) | `comfyui-h3-novita:v2.5.1` | kept (running at time of writing) |
+Quota is 5 tasks, and it is now full. Build A (`sha-289174e82568`) is prewarmed in
+four clusters; build B (`sha-cac7104aef86`) in one.
 
-The other four prewarms (as-sgp-2, eu-ger-2, us-dallas-nas-2, us-ca-nas-2) were
-deleted on request; quota is 1 of 5.
+| cluster | image | state | took |
+|---|---|---|---|
+| `us-ca-6` — US-CA-06 (California) | A `sha-289174e82568` | Succeeded | 29.0m |
+| `us-dallas-nas-2` — US-Dallas-NAS-02 | A `sha-289174e82568` | Succeeded | 6.5m |
+| `as-sgp-2` — AS-SGP-02 (Singapore) | A `sha-289174e82568` | Succeeded | 18.5m |
+| `eu-ger-2` — EU-GER-02 (Germany) | A `sha-289174e82568` | Succeeded | 18.4m |
+| `us-ca-6` — US-CA-06 (California) | B `sha-cac7104aef86` | Succeeded | 66.5m |
+
+`us-ca-nas-2` was dropped to make room for B: it reports no products at all.
+
+### Where a 4090 is actually available
+
+Availability is not the same as "has a prewarm". Of the clusters the API lists, only
+**`1` (US-01 Dallas)** and **`us-dallas-nas-2`** expose a 4090 product right now;
+`us-ca-6`, `as-sgp-2` and `eu-ger-2` currently offer only L40S. So the only cluster
+that is both prewarmed *and* has a 4090 is **`us-dallas-nas-2`**. `1` (US-01 Dallas)
+has 4090s but no prewarm.
+
+### Prewarm throughput varies a lot
+
+In the same cluster and the same window, the 83.00 GB image A pulled at ~47.7 MB/s
+(29.0 min) while the 46.78 GB image B managed only ~12.2 MB/s (66.5 min) — 4x slower
+for a smaller image. Both ended `Succeeded` with no error; the difference looks like
+node/peer congestion rather than anything about the image. Worth remembering when
+judging whether a prewarm is stuck: this one was not, just slow.
 
 ## Reproduce
 
