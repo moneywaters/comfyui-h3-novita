@@ -147,19 +147,75 @@ hybrid; ref2va adds reference conditioning. With only one H3 diffusion model pre
 hybrid path is unavailable. If you want it later, the single missing piece is
 `minimax_h3_fl2va_pruned_int8_convrot.safetensors` (20.97 GB).
 
-### Fetch status
+### Still downloading (as instructed: small files kept)
+| file | size |
+|---|---|
+| `loras/minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro0995.safetensors` | 1.16 GB |
+| `vae/minimax_h3_video_vae_int8_convrot.safetensors` (Kijai) | 3.17 GB |
 
-| file | size | state |
+Already fetched: `taeh3.safetensors` (9 MB), `loras/MINIMAX/minimax_h3_DMAD_4step_..._bf16` (350 MB).
+
+
+## Launching a prewarmed US-CA-06 box
+
+`~/novita-comfy.sh` (source: `ops/novita-comfy.sh`) — one command to get a running
+ComfyUI on the prewarmed cluster:
+
+```bash
+~/novita-comfy.sh            # start (or reuse) + print and open the GUI URL
+~/novita-comfy.sh status     # instance, endpoints, prewarm state
+~/novita-comfy.sh url        # just the GUI URL
+~/novita-comfy.sh ssh        # interactive shell (via the HTTP CONNECT proxy)
+~/novita-comfy.sh stop       # delete the instance
+```
+
+Defaults: cluster `us-ca-6` (US-CA-06), image `.../comfyui-h3-novita:v2.5.1`,
+name `seedhunter-prewarmed`, rootfs 200 GB, billing `auto` (spot, then on-demand).
+Override with `NOVITA_CLUSTER`, `NOVITA_IMAGE`, `NOVITA_BILLING`, `NOVITA_PRODUCT`,
+`NOVITA_INSTANCE_NAME`, `NOVITA_ROOTFS`, `NOVITA_NO_OPEN=1` (don't auto-open).
+
+Because US-CA-06 is prewarmed, `start` is near-instant — no 83 GB pull.
+
+## The stale-cache bug, and the fix
+
+**Symptom.** A prewarm task reported `Succeeded` (83.00 GB) and an instance booted
+from us-ca-6 in seconds — but it was running the *first* build: the v2.1 workflow,
+no Singularity, one LoRA, an empty latent-upscaler list.
+
+**Cause.** The prewarm was created on the mutable tag `:latest`. Docker Hub's
+`latest` did point at the new digest (`sha256:260882…`, 57 layers — verified), but
+the cluster node still had the **old digest cached under that tag name**, so
+starting from cache silently served stale layers. Nothing in the prewarm API
+surfaces this: `state=Succeeded` and a matching `imageSize` are both consistent
+with the wrong content.
+
+**Fix (three parts).**
+1. `ops/compose-image.py` now publishes a **content-derived tag** in addition to
+   `--out`: `sha-<first 12 hex of the manifest digest>`, and logs
+   `USE FOR PREWARM/DEPLOY: <repo>:sha-…`. A tag whose name encodes the digest
+   cannot be re-pointed at different bytes, so a prewarm on it is either current or
+   absent — never stale.
+2. `ops/novita-comfy.sh` warns in preflight when the image is a mutable tag
+   (`:latest`, `:main`, `:clore`) and names the content tag to use instead.
+3. `ops/retag.py` creates an immutable tag from an existing one without re-uploading
+   layers (used to mint `v2.5.1`, and to mint content tags).
+
+The existing us-ca-6 prewarm runs on `:v2.5.1`, which is already immutable.
+
+> Outstanding: the content tags for the images published *before* this change could
+> not be minted yet — Docker Hub's **token endpoint** (`auth.docker.io`) is being
+> blocked by the local VPN right now (`registry-1.docker.io` answers, `auth.docker.io`
+> returns 000 both directly and through the proxy). The next `build.yml` run creates
+> the content tag automatically as part of compose.
+
+## Prewarm state
+
+| cluster | image | state |
 |---|---|---|
-| `vae_approx/taeh3.safetensors` | 9 MB | fetched |
-| `loras/MINIMAX/minimax_h3_DMAD_4step_..._bf16.safetensors` | 350 MB | fetched |
-| `loras/minimax_h3_ref2v_..._dareties_fro0995.safetensors` | 1.16 GB | fetched |
-| `vae/minimax_h3_video_vae_int8_convrot.safetensors` (Kijai) | 3.17 GB | fetched |
-| **`diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors`** | **20.97 GB** | **downloading (~2.53 MB/s, ETA ~2h16m)** |
+| `us-ca-6` — US-CA-06 (California) | `comfyui-h3-novita:v2.5.1` | kept (running at time of writing) |
 
-Once fl2va lands, `finalize-v251.sh` restores the subgraph's `UNETLoader` default to fl2va
-(upstream fidelity) and re-links. The live subgraph instance (node 171) keeps pointing at
-ref2va, so which model actually runs is unchanged.
+The other four prewarms (as-sgp-2, eu-ger-2, us-dallas-nas-2, us-ca-nas-2) were
+deleted on request; quota is 1 of 5.
 
 ## Reproduce
 

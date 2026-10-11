@@ -266,6 +266,19 @@ def compose(args):
                           method="PUT", data=man_bytes, ctype=man_mt)
     log(f"  manifest put -> {st} {body[:200]!r}")
 
+    # Also publish a CONTENT-DERIVED tag. `latest` is mutable, so a cluster node's
+    # prewarm cache can keep serving an OLD digest for `latest` after a re-push --
+    # which is exactly how a prewarm reported "Succeeded" while the instance booted
+    # stale content. A tag whose name encodes the manifest digest cannot be
+    # re-pointed at different content, so a prewarm on it is current or absent.
+    man_digest = "sha256:" + hashlib.sha256(man_bytes).hexdigest()
+    content_tag = "sha-" + man_digest.split(":", 1)[1][:12]
+    token = get_token(repo, "pull,push")
+    st, _, _ = request(f"{REG}/v2/{repo}/manifests/{content_tag}", token,
+                       method="PUT", data=man_bytes, ctype=man_mt)
+    log(f"  content tag -> {content_tag} ({man_digest}) [{st}]")
+    log(f"  USE FOR PREWARM/DEPLOY: {repo}:{content_tag}")
+
     if args.out != "latest":
         token = get_token(repo, "pull,push")
         request(f"{REG}/v2/{repo}/manifests/latest", token, method="PUT",

@@ -139,8 +139,10 @@ for i in d.get('instances', []):
     ;;
 
   delete)
+    # the API field is `instanceId`; sending `id` fails VALIDATOR
+    # ("value length must be at least 1 runes") without deleting anything.
     id="${2:?instanceId}"
-    curl -s --max-time 30 -X POST "${AUTH[@]}" -d "{\"id\":\"$id\"}" "$B/gpu/instance/delete"; echo
+    curl -s --max-time 60 -X POST "${AUTH[@]}" -d "{\"instanceId\":\"$id\"}" "$B/gpu/instance/delete"; echo
     ;;
 
   *) sed -n '2,16p' "$0"; exit 1;;
