@@ -224,6 +224,74 @@ old layers in place, while the API reported `Succeeded`.
 **Policy:** prewarm exactly the reference you intend to deploy, and never rely on
 re-pushing an existing tag. Prefer the content tag, since it cannot be re-pointed.
 
+
+### Build determinism
+
+Re-running the build with an unchanged image definition produced a **different
+manifest digest** (`sha-144f9ad28217` then `sha-b300518d0c68`; same 57 layers, same
+83.00 GB, config blob 46112 B vs 46109 B). Podman records `created` timestamps in the
+config, so a rebuild is never byte-identical. Consequence: **every env rebuild
+produces a new content tag, which invalidates the prewarm** — budget a re-prewarm
+(~12-30 min) after any image change.
+
+### Two build bugs found and fixed
+
+1. **Seed Hunter v2.5.1 had a red node.** `ThreeWaySwitch` was missing from the
+   image. `ControlAltAI-Nodes` was documented as baked in but was never in
+   `build/nodes.sh`. Added, and `verify-env.sh` now asserts the classes the shipped
+   workflows need are registered, so a best-effort clone that silently fails aborts
+   the build.
+2. **Image B could not compose.** Every part — including the `qwen-*` ones — is
+   pushed to the `IMAGE_A` repository, but B composed with `--env part-env` resolved
+   in B's own repo and died with `MANIFEST_UNKNOWN`. The workflow now passes
+   `--parts-repo` pointing at image A.
+
+Current tags:
+
+| image | content tag | digest | size |
+|---|---|---|---|
+| `comfyui-h3-novita` | `sha-144f9ad28217` | `sha256:144f9ad28217…` | 83.00 GB / 57 layers |
+| `comfyui-qwen-novita` | `sha-bbf34a62c728` | `sha256:bbf34a62c728…` | 46.78 GB / 41 layers |
+
+### Shadowrocket must be ON to reach Novita
+
+Novita resolves through Shadowrocket's tunnel (`utun5`, `198.18.0.1`, system proxy
+`127.0.0.1:1082`) to a fake IP (`198.18.0.33`). With the tunnel down *and* the proxy
+still configured, every HTTPS request dies with `SSL_ERROR_SYSCALL` — including
+connections made straight to Novita's real IPs. Docker Hub behaves the same, and
+`auth.docker.io` is blocked even with the tunnel up. Net: **registry work belongs on
+GitHub Actions; Novita work needs the tunnel up.**
+
+
+### v2.5.1 was desynced from image A
+
+Commit `71cb638` ("Remap v2.5.1 onto the existing ref2va") rewrote the workflow's
+HybridLoader `unet_name` from `Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8` to
+`minimax_h3_ref2va_pruned_int8_convrot` — the Comfy-Org model, which is **in image B,
+not A**. That remap was a stopgap from when the two 21 GB downloads were cancelled;
+the Singularity plan was executed afterwards, but the workflow was never reverted.
+
+Image A ships `Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8` +
+`minimax_h3_fl2va_pruned_int8_convrot`, so the baked workflow pointed at a model that
+does not exist in A.
+
+`63dc6bf:workflows/Minimax_Seed_Hunter_v2.5.1.json` is **byte-identical to the
+workflow supplied at** `/Users/asan/Downloads/minimaxH3SEEDHUNTERLatent_v251.json`
+(md5 `62a802dd3d19f293e15d144dde09c5c7`) and is the version consistent with image A.
+It has been restored.
+
+Verified on image `sha-144f9ad28217`:
+
+* all 53 workflow node types resolve — `ThreeWaySwitch` included, 0 missing
+* `taeh3.safetensors` is in `models/vae_approx/` (from the `h3extra` part)
+* `minimax_h3_latent_upscaler_3d_conv_v1_fp16.safetensors` is in
+  `models/latent_upscale_models/`
+* both `Minimax-h3_Singularity…` and `minimax_h3_fl2va…` are in `models/diffusion_models/`
+
+> Note: `POST /userdata/<file>` on ComfyUI takes a **raw body**, not multipart. A
+> multipart upload returns 200 but saves the MIME preamble, producing invalid JSON
+> and a silent 235-byte bloat.
+
 ## Prewarm state
 
 | cluster | image | state |

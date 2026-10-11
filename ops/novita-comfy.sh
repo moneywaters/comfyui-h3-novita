@@ -9,7 +9,7 @@
 #
 # Overrides (env):
 #   NOVITA_API_KEY        API key                     (default from ops/novita.sh)
-#   NOVITA_IMAGE          image ref to run            (default .../comfyui-h3-novita:sha-260882616d3e)
+#   NOVITA_IMAGE          image ref to run            (default .../comfyui-h3-novita:sha-144f9ad28217)
 #   NOVITA_CLUSTER        cluster id                  (default us-ca-6, i.e. US-CA-06)
 #   NOVITA_INSTANCE_NAME  instance name to reuse/make (default seedhunter-prewarmed)
 #   NOVITA_ROOTFS         rootfs GB                   (default 200)
@@ -28,7 +28,7 @@ set -uo pipefail
 
 API_KEY="${NOVITA_API_KEY:-sk_-9UruuL5HS9S3lT0iStLtkFhTFxixkEd00zSPjI9tv8}"
 B="https://api.novita.ai/gpu-instance/openapi/v1"
-IMAGE="${NOVITA_IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-260882616d3e}"
+IMAGE="${NOVITA_IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-144f9ad28217}"
 CLUSTER="${NOVITA_CLUSTER:-us-ca-6}"
 NAME="${NOVITA_INSTANCE_NAME:-seedhunter-prewarmed}"
 ROOTFS="${NOVITA_ROOTFS:-200}"
@@ -206,7 +206,7 @@ print(i.get('status',''))")
         *:latest|*:clore|*:main)
             echo "  WARNING: '$IMAGE' is a mutable tag."
             echo "           A prewarm on it may serve a stale cached image."
-            echo "           Prefer the content tag a build prints, e.g. :sha-260882616d3e";;
+            echo "           Prefer the content tag a build prints, e.g. :sha-144f9ad28217";;
     esac
     pw=$(check_prewarm)
     echo "  image  : $IMAGE"
