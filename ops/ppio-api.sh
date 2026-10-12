@@ -36,7 +36,7 @@ SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
 API_KEY="${PPIO_API_KEY:-sk_YPyomQB6CJYriRsMrA_rZtAxiuaIAdsgiH8piQQmaqc}"
 B="${PPIO_API_BASE:-https://api.ppio.com/gpu-instance/openapi/v1}"
-IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-c025a0f7838a}"
+IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-57e1cbb32e69}"
 CLUSTER="${PPIO_CLUSTER:-us-ca-6}"
 WANT="${PPIO_WANT:-4090}"
 BILLING="${PPIO_BILLING:-onDemand}"

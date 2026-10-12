@@ -555,6 +555,43 @@ sequence is ~10 min of provisioning/pull/unpack with an optimistic `running` fla
 This is also why an earlier note in this report claiming a swap came up "in ~20 seconds"
 was wrong: that measured the API status, not readiness.
 
+
+### Result of the caching fix, and one thing I could not verify
+
+The headers are right now:
+
+```
+/extensions/ComfyUI-Pixaroma/help_browser/index.js
+  cache-control: public, max-age=86400
+/extensions/ComfyUI-KJNodes/js/...        public, max-age=86400
+/assets/index-CKO20XHW.js                 public, max-age=86400
+```
+
+But driving Orca's embedded browser, a reload still issued 976 requests with 964 × `200`
+and only 3 × `304`. That is what a **cache-disabled automation context** looks like, and
+I could not rule that out from here, so I am not claiming the browser-cache win is proven
+in a real browser — only that the response headers now permit it.
+
+A real gap I did find: these responses carry **no `ETag` and no `Last-Modified`**, so
+conditional requests are impossible (asking with either header just returns `200` again).
+`max-age` alone is what has to carry the whole win. Adding validators would give a 304
+fallback path that works even when a client revalidates.
+
+### Instance start-up: ~10 minutes before anything is listening
+
+From the previous swap: instance `createdAt` **09:13:26** → ComfyUI's python process start
+**09:23:33** = **607s**. The API flips to `running` long before the container is serving,
+which is why "running" in the console does not mean "usable". The measured phases are:
+
+| phase | time |
+|---|---|
+| create -> ComfyUI python start | ~10 min (provision, pull, unpack) |
+| python start -> server listening | ~2 s |
+| first page load (cold) | ~87 s |
+
+Prewarming did not remove the ~10 minutes, only the image-download part of it. That is
+worth setting expectations against: a fresh instance is ~10 min from click to usable.
+
 ### Prewarms created
 
 Image `docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568` (83.00 GB, resolved
