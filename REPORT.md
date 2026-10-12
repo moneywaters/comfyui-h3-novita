@@ -657,6 +657,48 @@ Wire it up with `PPIO_LIMIT_NODES=1 ./ops/ppio-api.sh launch us-ca-6`.
 Caveat: this disables ComfyUI-Manager too, so the Manager panel is gone. That is the point
 of "nothing else", but it means no in-browser node installation on that instance.
 
+
+### HybridLoader needs matching key prefixes (found the hard way)
+
+Wiring `Load Models & Patches` to `MiniMaxH3HybridLoader` (fl2va base + Singularity overlay)
+failed at execution:
+
+```
+RuntimeError: MiniMax H3 hybrid loader: the two checkpoints have different key sets,
+cannot hybridise.
+base-only    = ['adaln_t_table', 'blocks.0.adaln_proj.linear.weight', ...]
+overlay-only = ['model.diffusion_model.adaln_t_table', 'model.diffusion_model.blocks.0...']
+```
+
+Both files hold the **same 932 tensors**; Singularity is packaged with the
+`model.diffusion_model.` prefix and the Comfy-Org fl2va is not. ComfyUI's stock loaders
+normalise that prefix internally, which is why a plain `UNETLoader` never cared — but the
+hybrid merges key-by-key and refuses.
+
+**Fix:** `build/normalize-models.sh` strips the prefix. It rewrites **only the JSON
+header** — safetensors offsets are relative to the data section, so padding the shorter
+JSON with spaces keeps the header the same byte length and every offset valid. No tensor
+data is read or moved; the file size is unchanged (20,967,647,456 both before and after)
+and it costs milliseconds. Verified idempotent, and both files end with 932 keys, 0
+prefixed.
+
+It runs from `start.sh` at container boot rather than at build time, because the models
+live in their own build part — baking the change would mean re-downloading 20 GB. That is
+a deliberate trade-off worth revisiting if the models ever move into the env part.
+
+After normalising, the hybrid loads:
+
+```
+[MiniMaxH3Hybrid] base=minimax_h3_fl2va_pruned_int8_convrot.safetensors
+                  overlay=Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors
+                  preset=block_range_adaln blocks=25..49
+Prompt executed in 0.15 seconds
+```
+
+Settings follow the node's README recommendation for higher ref2va quality: fl2va as base,
+ref2va as overlay, `block_range_adaln`, blocks 25..49. `ComfyUI_MinimaxH3HybridLoader` was
+added to the `PPIO_LIMIT_NODES` whitelist accordingly.
+
 ### Prewarms created
 
 Image `docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568` (83.00 GB, resolved

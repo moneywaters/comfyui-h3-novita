@@ -46,7 +46,7 @@ BILLING="${PPIO_BILLING:-onDemand}"
 # NOTE: --whitelist-custom-nodes is argparse nargs='+' (SPACE separated). A comma-joined
 # string becomes ONE bogus entry and ComfyUI then skips EVERY custom node.
 LIMIT_NODES="${PPIO_LIMIT_NODES:-0}"
-WHITELIST="${PPIO_WHITELIST:-ComfyUI-Easy-Use ComfyUI-Fantastic-MiniMaxH3-PromptBuilder ComfyUI-H3-Prompt-IDE ComfyUI-KJNodes ComfyUI-MiniMaxH3Mod ComfyUI-Pixaroma ComfyUI-VFI ComfyUI-VideoHelperSuite Comfyui_Minimax_h3_latent_Upscaler ControlAltAI-Nodes}"
+WHITELIST="${PPIO_WHITELIST:-ComfyUI-Easy-Use ComfyUI-Fantastic-MiniMaxH3-PromptBuilder ComfyUI-H3-Prompt-IDE ComfyUI-KJNodes ComfyUI-MiniMaxH3Mod ComfyUI-Pixaroma ComfyUI-VFI ComfyUI-VideoHelperSuite Comfyui_Minimax_h3_latent_Upscaler ControlAltAI-Nodes ComfyUI_MinimaxH3HybridLoader}"
 ROOTFS="${PPIO_ROOTFS:-200}"
 NAME="${PPIO_NAME:-seedhunter-ppio}"
 # PPIO exposes these four 4090 SKUs under billingMethod=spot

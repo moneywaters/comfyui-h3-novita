@@ -49,6 +49,14 @@ cd "${COMFYUI_PATH:-/opt/ComfyUI}" || exit 1
 PY="${VIRTUAL_ENV:-/opt/comfyui-venv}/bin/python3"
 mkdir -p /var/log
 
+# Blend a base + overlay checkpoint requires matching key sets; Singularity ships the
+# "model.diffusion_model." prefix and fl2va does not, which makes HybridLoader refuse.
+# Header-only rewrite, milliseconds, idempotent -- see build/normalize-models.sh.
+if [ -x /opt/normalize-models.sh ]; then
+    log "normalising model key prefixes"
+    bash /opt/normalize-models.sh 2>&1 | sed 's/^/[norm] /' || log "WARN: normalise-models failed"
+fi
+
 log "starting ComfyUI ($PY)"
 "$PY" main.py --listen 0.0.0.0 --port 8188 --preview-method auto > /var/log/comfyui.log 2>&1 &
 COMFY_PID=$!
