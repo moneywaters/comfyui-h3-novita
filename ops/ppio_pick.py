@@ -1,111 +1,103 @@
 #!/usr/bin/env python3
-"""Arrow-key dropdown selector for ppio.sh.
+"""Location picker for ppio.sh, built on questionary (prompt_toolkit).
 
-Reads a JSON array of {"id", "label"} objects (argv[1], or stdin when piped), draws the
-menu on the **controlling terminal**, and prints only the chosen `id` on stdout. That
-split is deliberate: callers capture stdout with `$(...)`, which makes it a pipe — so
-the UI must not go there or it would be swallowed instead of displayed.
+Reads a JSON array of {"id", "cols": [...]} on argv[1] (or stdin), draws a selectable
+menu, and prints the chosen `id` on stdout.
 
-Keys:  ↑/↓ or j/k move · Enter select · 1-9 jump · q or Esc cancel
-With no controlling terminal (piped, cron, CI) it prints the options to stderr and
-reads a number, so it still works unattended.
+Two things this has to get right:
+
+* **The UI cannot be drawn on stdout.** The caller captures the result with `$(...)`,
+  which makes stdout a pipe — the menu would be swallowed into the variable instead of
+  displayed. So stdout is temporarily pointed at the controlling terminal for the
+  duration of the prompt, then restored, and only the id is written to the real stdout.
+* **Column widths must count display cells, not characters.** Chinese place names are
+  double-width, so `%-18s` padding misaligns every row after the first. wcswidth +
+  explicit padding keeps the columns straight.
+
+Note: questionary does not bind Esc to abort, so the prompt advertises Ctrl-C.
+
+With no controlling terminal it prints the options to stderr and reads a number, so it
+still works from a script.
 """
 import json
 import os
 import sys
 
-ESC = "\x1b"
+try:
+    from wcwidth import wcswidth
+except ImportError:                                   # pragma: no cover
+    def wcswidth(s):
+        return len(s)
 
 
-def open_tty():
-    """The controlling terminal as (read, write) handles, even when stdin/stdout are pipes.
+def display_width(s):
+    w = wcswidth(s)
+    return len(s) if w < 0 else w
 
-    Opened twice on purpose: a tty is not seekable, so a single "r+" handle raises
-    UnsupportedOperation ("File or stream is not seekable"). termios state is per-tty,
-    not per-fd, so raw mode set via the read handle applies to the terminal as a whole.
-    """
+
+def pad(s, width):
+    return s + " " * max(0, width - display_width(s))
+
+
+def open_tty(mode):
     try:
-        return open("/dev/tty", "r"), open("/dev/tty", "w", buffering=1)
+        return open("/dev/tty", mode, buffering=1)
     except Exception:
         return None
 
 
-def render(w, items, cur):
-    w.write(f"{ESC}[?25l")                                    # hide cursor
-    w.write(f"{ESC}[2K  {ESC}[1mPPIO — pick a location with a 4090{ESC}[0m\n")
-    for i, it in enumerate(items):
-        rev, off = (f"{ESC}[7m", f"{ESC}[0m") if i == cur else ("", "")
-        arrow = "▸" if i == cur else " "
-        w.write(f"{ESC}[2K  {rev}{arrow} {i+1:>2}. {it['label']}{off}\n")
-    w.write(f"{ESC}[2K\n{ESC}[2K  {ESC}[2m↑/↓ move · Enter select · q quit{ESC}[0m\n")
-    w.write(f"{ESC}[{len(items)+4}A")                          # park cursor to redraw
-    w.flush()
+def format_rows(items, gap="   "):
+    """Join each item's columns into a single display-aligned title."""
+    ncols = max((len(it["cols"]) for it in items), default=0)
+    widths = [0] * ncols
+    for it in items:
+        for i, c in enumerate(it["cols"]):
+            widths[i] = max(widths[i], display_width(c))
+    rows = []
+    for it in items:
+        cells = [pad(c, widths[i]) for i, c in enumerate(it["cols"])]
+        rows.append((it["id"], gap.join(cells).rstrip()))
+    return rows
 
 
-def choose_tty(reader, writer, items):
-    import termios
-    import tty as ttymod
-
-    fd = reader.fileno()
-
-    def key():
-        """Read one key as raw bytes.
-
-        Deliberately os.read, not reader.read: a text-mode handle on a tty applies
-        universal-newline translation, which rewrites a CR keypress so an Enter
-        keypress never matches "\\r" and the menu appears to ignore Enter.
-        """
-        try:
-            b = os.read(fd, 1)
-        except OSError:
-            return ""
-        return b.decode("latin-1") if b else ""
-
-    old = termios.tcgetattr(fd)
-    cur = 0
+def choose(items):
     try:
-        ttymod.setraw(fd)            # -icanon: one key at a time; -echo: we draw the highlight
-        render(writer, items, cur)
-        while True:
-            ch = key()
-            if ch in ("\r", "\n"):
-                return items[cur]["id"]
-            if ch in ("q", "\x03", "\x04"):
-                return None
-            if ch == ESC:
-                nxt = key()
-                if nxt == "[":
-                    a = key()
-                    if a == "A":
-                        cur = (cur - 1) % len(items)
-                    elif a == "B":
-                        cur = (cur + 1) % len(items)
-                    render(writer, items, cur)
-                    continue
-                return None                       # bare Esc
-            if ch == "k":
-                cur = (cur - 1) % len(items)
-            elif ch == "j":
-                cur = (cur + 1) % len(items)
-            elif ch.isdigit() and ch != "0":
-                idx = int(ch) - 1
-                if idx < len(items):
-                    cur = idx
-            else:
-                continue
-            render(writer, items, cur)
+        import questionary
+    except ImportError:
+        print("ppio_pick: questionary is not installed.\n"
+              "  fix: python3 -m pip install --user questionary", file=sys.stderr)
+        return None, 1
+
+    tty = open_tty("w")
+    if tty is None:
+        return choose_plain(items), 0
+
+    rows = format_rows(items)
+    real_stdout = sys.stdout
+    sys.stdout = tty                                  # menu to the terminal...
+    try:
+        answer = questionary.select(
+            "PPIO — which location?",
+            choices=[questionary.Choice(title=title, value=rid) for rid, title in rows],
+            qmark="",
+            pointer="▸",
+            instruction="  (↑/↓ · Enter · Ctrl-C cancels)",
+        ).ask()
+    except KeyboardInterrupt:
+        answer = None
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        writer.write(f"{ESC}[?25h\n")
-        writer.flush()
+        sys.stdout = real_stdout                      # ...and the result back to the pipe
+        tty.close()
+    return answer, 0
 
 
 def choose_plain(items):
     """No terminal: menu to stderr, number from stdin."""
+    rows = format_rows(items)
     e = sys.stderr
-    e.write("PPIO — locations with a 4090:\n")
-    for i, it in enumerate(items):
-        e.write(f"  {i+1:>2}. {it['label']}\n")
+    e.write("PPIO — which location?\n")
+    for i, (_, title) in enumerate(rows):
+        e.write(f"  {i+1:>2}. {title}\n")
     e.flush()
     try:
         raw = input("select number (Enter to cancel): ").strip()
@@ -131,20 +123,10 @@ def main():
         print("ppio_pick: nothing to choose from", file=sys.stderr)
         return 1
 
-    handles = open_tty()
-    if handles:
-        tty_in, tty_out = handles
-        picked = choose_tty(tty_in, tty_out, items)
-        tty_in.close()
-        tty_out.close()
-    elif sys.stdin.isatty():
-        picked = choose_plain(items)
-    else:
-        print("ppio_pick: no terminal; launch a location explicitly "
-              "(e.g. ./ppio.sh launch us-ca-6)", file=sys.stderr)
-        return 1
-
-    if picked is None:
+    picked, rc = choose(items)
+    if rc:
+        return rc
+    if not picked:
         print("cancelled", file=sys.stderr)
         return 130
     print(picked)

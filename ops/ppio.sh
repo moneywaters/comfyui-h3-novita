@@ -141,8 +141,9 @@ for i in d:
     ;;
 
   menu)
-    echo "== checking which locations have a $WANT ==" >&2
-    # one MCP round trip: enumerate clusters, then price each in turn inside the JS
+    echo "== checking which locations have a $WANT available ==" >&2
+    # one MCP round trip: enumerate clusters, then check each for live capacity in JS.
+    # Only clusters with something actually deployable are returned.
     items=$(pp "
 async () => {
   const cl = await api.request({method:'GET', path:'/openapi/v1/clusters', apiProduct:'gpu'});
@@ -153,22 +154,26 @@ async () => {
     const p = await api.request({method:'GET', path:'/openapi/v1/products', apiProduct:'gpu',
                                   query:{ clusterId: c.id, gpuNum: 1 }});
     const pr = (p.data && p.data.data) || [];
-    const h = pr.filter(x => new RegExp($(jsq "$WANT")).test(x.name||''));
-    out.push({ id: c.id, name: c.name, skus: h.length,
-               deployable: h.filter(x => x.availableDeploy).length });
+    const live = pr.filter(x => new RegExp($(jsq "$WANT")).test(x.name||'') && x.availableDeploy);
+    if (live.length) out.push({ id: c.id, name: c.name, deployable: live.map(x => x.id) });
   }
-  out.sort((a,b) => b.deployable - a.deployable || a.id.localeCompare(b.id));
+  out.sort((a,b) => b.deployable.length - a.deployable.length || a.id.localeCompare(b.id));
   return out;
 }")
-    [ -z "$items" ] && { echo "no location offers a $WANT"; exit 1; }
+    if [ -z "$items" ] || [ "$items" = "[]" ]; then
+      echo
+      echo "No location currently has a $WANT available for deployment."
+      echo "The prewarm is done, so a launch will be fast whenever capacity appears."
+      echo "Poll for it with:  $0 --wait"
+      exit 1
+    fi
     menu_json=$(echo "$items" | python3 -c "
 import json,sys
 rows=json.load(sys.stdin)
 out=[]
 for r in rows:
-    live = (str(r['deployable'])+' deployable') if r['deployable'] else 'no capacity now'
     out.append({'id': r['id'],
-                'label': '%-18s %-24s %d SKUs  %s' % (r['id'], r['name'], r['skus'], live)})
+                'cols': [r['id'], r['name'], '%d available' % len(r['deployable'])]})
 print(json.dumps(out, ensure_ascii=False))
 ")
     pick=$(python3 "$HERE/ppio_pick.py" "$menu_json") || exit $?
