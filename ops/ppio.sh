@@ -3,6 +3,11 @@
 # Mirrors ops/novita.sh, but PPIO's access is OAuth-via-MCP (see ppio_mcp.py) rather
 # than an API key, because the supplied PPIO key is rejected with 401 "key not found".
 #
+# Running it with no arguments LAUNCHES a 4090 SPOT instance on us-ca-6.
+#
+#   ./ppio.sh                                   launch 4090 spot on us-ca-6  (default)
+#   ./ppio.sh --wait                            poll us-ca-6 for 4090 capacity, then launch
+#   ./ppio.sh launch [cluster] [4090]           launch explicitly
 #   ./ppio.sh clusters                          list clusters (and whether they have a 4090)
 #   ./ppio.sh products [4090] [spot|onDemand|monthly]
 #                                               products with stock + region count
@@ -10,23 +15,31 @@
 #   ./ppio.sh prewarm [image] [cluster] [pids]  create a prewarm task
 #   ./ppio.sh prewarm-wait <taskId>             poll a prewarm task
 #   ./ppio.sh instances                         list instances
-#   ./ppio.sh launch [cluster] [4090]           start a 4090 spot instance and print the URL
 #   ./ppio.sh deploy-wait [cluster] [4090]      poll for capacity, then create
 #   ./ppio.sh create <cluster> <productId> [rootfs] [name]
 #   ./ppio.sh status <instanceId>               instance status
 #   ./ppio.sh ip <instanceId>                   ip + port mappings
 #   ./ppio.sh delete <instanceId>               terminate an instance
 #
-# Defaults: cluster us-ca-6, image = the H3 build with the splash fix.
+# Override the defaults with PPIO_CLUSTER (default us-ca-6), PPIO_WANT (default 4090),
+# PPIO_ROOTFS and PPIO_NAME.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568}"
 CLUSTER="${PPIO_CLUSTER:-us-ca-6}"
+WANT="${PPIO_WANT:-4090}"
 ROOTFS="${PPIO_ROOTFS:-200}"
 NAME="${PPIO_NAME:-seedhunter-ppio}"
 # PPIO exposes these four 4090 SKUs under billingMethod=spot
 SPOT_4090="4090.16c62g,4090.16c62g.os,4090.16c125g,4090.16c96g.v2"
+
+# Bare invocation launches; `--wait` polls for capacity first.
+case "${1:-}" in
+  "")           set -- launch      "$CLUSTER" "$WANT" ;;
+  --wait)       set -- deploy-wait "${2:-$CLUSTER}" "${3:-$WANT}" ;;
+  --status)     set -- instances ;;
+esac
 
 pp()  { python3 "$HERE/ppio_mcp.py" "$1"; }
 fmt() { python3 -c "import json,sys;d=json.load(sys.stdin);$1"; }
@@ -126,7 +139,7 @@ for i in d:
     ;;
 
   launch)
-    cluster="${2:-$CLUSTER}"; want="${3:-4090}"
+    cluster="${2:-$CLUSTER}"; want="${3:-$WANT}"
     echo "== launch: cluster=$cluster =="
     echo "   image: $IMAGE"
     CL="$cluster" IMG="$IMAGE" pp "
@@ -173,7 +186,7 @@ async () => {
     ;;
 
   deploy-wait)
-    cluster="${2:-$CLUSTER}"; want="${3:-4090}"
+    cluster="${2:-$CLUSTER}"; want="${3:-$WANT}"
     for i in $(seq 1 240); do
       prods=$(CL="$cluster" WANT="$want" pp "
 async () => {
@@ -238,5 +251,6 @@ async () => (await api.request({method:'POST', path:'/openapi/v1/gpu/instance/de
     echo
     ;;
 
-  *) sed -n '2,19p' "$0"; exit 1;;
+  help|-h|--help) sed -n '6,25p' "$0"; exit 0;;
+  *) echo "unknown command: $1" >&2; echo; sed -n '6,25p' "$0" >&2; exit 2;;
 esac

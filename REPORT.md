@@ -413,7 +413,9 @@ Quota is now 5 of 5. Three of the eight spot clusters (`eu-gb-1`, `oc-au-1`,
 
 ### ops/ppio.sh
 
-A PPIO counterpart to `ops/novita.sh`, defaulting to `us-ca-6`:
+A PPIO counterpart to `ops/novita.sh`. **Running it bare launches a 4090 SPOT instance
+on `us-ca-6`** — `--wait` polls for capacity first, and `PPIO_CLUSTER` / `PPIO_WANT`
+override the target:
 
 ```bash
 ./ops/ppio.sh clusters                          # clusters, flagging the ones with a 4090
@@ -422,7 +424,9 @@ A PPIO counterpart to `ops/novita.sh`, defaulting to `us-ca-6`:
 ./ops/ppio.sh prewarm [image] [cluster] [pids]  # create a prewarm
 ./ops/ppio.sh prewarm-wait <taskId>
 ./ops/ppio.sh instances
-./ops/ppio.sh launch [cluster] [4090]           # start a 4090 SPOT instance, print the URL
+./ops/ppio.sh                                   # launch 4090 spot on us-ca-6 (default)
+./ops/ppio.sh --wait                            # poll us-ca-6 for 4090, then launch
+./ops/ppio.sh launch [cluster] [4090]           # start a 4090 SPOT instance
 ./ops/ppio.sh deploy-wait [cluster] [4090]      # poll for capacity, then create
 ./ops/ppio.sh create <cluster> <productId> [rootfs] [name]
 ./ops/ppio.sh status|ip|delete <instanceId>
