@@ -33,7 +33,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # absolute path to this script: "$0" may be a bare relative name like
 # "ppio.sh" (e.g. `sh ppio.sh`), which exec would look up in PATH and miss
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-57e1cbb32e69}"
+IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-f4ab74b24536}"
 CLUSTER="${PPIO_CLUSTER:-us-ca-6}"
 WANT="${PPIO_WANT:-4090}"
 BILLING="${PPIO_BILLING:-onDemand}"

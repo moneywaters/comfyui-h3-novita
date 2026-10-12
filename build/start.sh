@@ -58,7 +58,11 @@ if [ -x /opt/normalize-models.sh ]; then
 fi
 
 log "starting ComfyUI ($PY)"
-"$PY" main.py --listen 0.0.0.0 --port 8188 --preview-method auto > /var/log/comfyui.log 2>&1 &
+# --enable-compress-response-body matters a lot here: /object_info is 3.55 MB of JSON and
+# gzip takes it to 389 KB (9.1x). Over a remote host's proxy (~40 KB/s effective) that is
+# the difference between an 84s stall on the loading screen and ~9s.
+"$PY" main.py --listen 0.0.0.0 --port 8188 --preview-method auto \
+    --enable-compress-response-body > /var/log/comfyui.log 2>&1 &
 COMFY_PID=$!
 log "ComfyUI pid=$COMFY_PID  (log: /var/log/comfyui.log)"
 

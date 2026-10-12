@@ -36,7 +36,7 @@ SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
 API_KEY="${PPIO_API_KEY:-sk_YPyomQB6CJYriRsMrA_rZtAxiuaIAdsgiH8piQQmaqc}"
 B="${PPIO_API_BASE:-https://api.ppio.com/gpu-instance/openapi/v1}"
-IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-57e1cbb32e69}"
+IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-f4ab74b24536}"
 CLUSTER="${PPIO_CLUSTER:-us-ca-6}"
 WANT="${PPIO_WANT:-4090}"
 BILLING="${PPIO_BILLING:-onDemand}"
@@ -263,7 +263,8 @@ if os.environ.get("LIMIT_NODES") == "1":
     # key is already baked into the image's /root/.ssh/authorized_keys, so it still works.
     inner = ("cd /opt/ComfyUI && /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config & "
              "exec /opt/comfyui-venv/bin/python3 main.py --listen 0.0.0.0 --port 8188 "
-             "--preview-method auto --disable-all-custom-nodes --whitelist-custom-nodes "
+             "--preview-method auto --enable-compress-response-body "
+             "--disable-all-custom-nodes --whitelist-custom-nodes "
              + os.environ["WHITELIST"])
     b["command"] = "/bin/bash -c " + json.dumps(inner)
 print(json.dumps(b))

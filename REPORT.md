@@ -699,6 +699,36 @@ Settings follow the node's README recommendation for higher ref2va quality: fl2v
 ref2va as overlay, `block_range_adaln`, blocks 25..49. `ComfyUI_MinimaxH3HybridLoader` was
 added to the `PPIO_LIMIT_NODES` whitelist accordingly.
 
+
+### Why the loading screen stalls: /object_info without compression
+
+Measured on the deployed instance:
+
+| | time |
+|---|---|
+| `/` (20 KB) | 1.9 s |
+| `/extensions` | 2.2 s |
+| **`/object_info` (3.55 MB)** | **84.5 s** |
+
+Locally the same request takes **0.20 s**, so the server is fine — it is pure throughput on
+a large payload over a high-latency link (~42 KB/s effective).
+
+ComfyUI had response compression **off** (`main.py ... --enable-compress-response-body` was
+not in the args; `Accept-Encoding: gzip` returned the identical 3,554,279 bytes). Enabling
+it on a test server:
+
+| | bytes |
+|---|---|
+| `/object_info` uncompressed | 3,554,279 |
+| `/object_info` gzip | **388,812** (9.1x smaller) |
+
+So the loading screen's worst stall goes from ~84s to ~9s. `--enable-compress-response-body`
+is now in `start.sh`, and also in the `PPIO_LIMIT_NODES` command so it applies with no
+rebuild.
+
+Worth noting the whitelist compounds with this: with packs disabled `/object_info` is
+3,190,770 bytes instead of 3,554,279 before compression, and 389 KB after.
+
 ### Prewarms created
 
 Image `docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568` (83.00 GB, resolved
