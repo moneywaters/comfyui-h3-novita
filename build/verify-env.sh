@@ -115,6 +115,58 @@ if [ -n "$PIXSR" ]; then
     fi
 fi
 
+
+echo "=== SeedVR2 bulk workflow ==="
+# packs
+for d in ComfyUI-BatchFolderTools ComfyMath ComfyUI-SeedVR2_VideoUpscaler bulk_io; do
+    if [ -d "/opt/ComfyUI/custom_nodes/$d" ]; then
+        echo "  OK  pack $d"
+    else
+        echo "  BAD pack $d missing"; FAIL=$((FAIL+1))
+    fi
+done
+# our own pack must keep its web dir, or the buttons never render
+if [ -f /opt/ComfyUI/custom_nodes/bulk_io/web/bulk_io.js ]; then
+    echo "  OK  bulk_io web extension present"
+else
+    echo "  BAD bulk_io/web/bulk_io.js missing (no upload/download buttons)"; FAIL=$((FAIL+1))
+fi
+# cv2: BatchFolderTools' folder loader imports it
+if "${VIRTUAL_ENV:-/opt/comfyui-venv}/bin/python3" -c "import cv2" 2>/dev/null; then
+    echo "  OK  import cv2 (BatchFolderTools needs it)"
+else
+    echo "  BAD cv2 not importable"; FAIL=$((FAIL+1))
+fi
+# the §5 cache patch
+SEEDCFG=/opt/ComfyUI/custom_nodes/ComfyUI-SeedVR2_VideoUpscaler/src/core/model_configuration.py
+if [ -f "$SEEDCFG" ]; then
+    if grep -q 'if cached_model is not None:' "$SEEDCFG" && grep -q 'if cached_vae is not None:' "$SEEDCFG"; then
+        echo "  OK  SeedVR2 cache patch applied"
+    else
+        echo "  BAD SeedVR2 cache_model truthiness test unpatched (2nd run dies on len())"; FAIL=$((FAIL+1))
+    fi
+fi
+# the workflow itself
+if [ -f "/opt/ComfyUI/user/default/workflows/Naxci1-SeedVR2.5-Auto-Manuel-BULK.json" ]; then
+    echo "  OK  bulk workflow shipped"
+else
+    echo "  BAD bulk workflow missing"; FAIL=$((FAIL+1))
+fi
+# node classes each pack must contribute
+for cls in BulkVideoUpload DownloadAllZip FolderVideoLoader_BFT QueueNext_BFT CM_IntToFloat CM_FloatToInt JoinStrings; do
+    if grep -rqs --include='*.py' "\"$cls\"\|'$cls'" /opt/ComfyUI/custom_nodes; then
+        echo "  OK  $cls"
+    else
+        echo "  BAD $cls not provided by any pack"; FAIL=$((FAIL+1))
+    fi
+done
+# DVB must NOT be present: the bulk workflow replaces it and it pins numpy<2
+if [ -d /opt/ComfyUI/custom_nodes/comfyui-dream-video-batches ]; then
+    echo "  BAD comfyui-dream-video-batches present (pins numpy<2; must not ship)"; FAIL=$((FAIL+1))
+else
+    echo "  OK  comfyui-dream-video-batches absent"
+fi
+
 echo "=== sshd ==="
 test -x /usr/sbin/sshd && echo "  OK sshd present" || { echo "  BAD sshd missing"; FAIL=$((FAIL+1)); }
 

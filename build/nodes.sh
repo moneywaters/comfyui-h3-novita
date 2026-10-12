@@ -36,6 +36,15 @@ clone https://github.com/scottmudge/ComfyUI_MinimaxH3HybridLoader.git           
 # supplies ThreeWaySwitch, used twice by Seed Hunter v2.5.1
 clone https://github.com/gseth/ControlAltAI-Nodes.git                                ControlAltAI-Nodes
 
+# --- SeedVR2 bulk upscale workflow (handoff/SEEDVR2_BULK_HANDOFF.md) ----------
+# FolderVideoLoader_BFT (iterates a folder) + QueueNext_BFT (self-requeue, so one
+# Queue Prompt walks the whole batch). Needs opencv (import cv2) -- installed below.
+clone https://github.com/hodgemann/ComfyUI-BatchFolderTools.git                ComfyUI-BatchFolderTools
+# CM_IntToFloat / CM_FloatToInt, the upscale-factor maths
+clone https://github.com/evanspearman/ComfyMath.git                            ComfyMath
+# NOTE: do NOT add comfyui-dream-video-batches (DVB). The bulk workflow replaces its
+# For Each nodes with BatchFolderTools, and DVB pins numpy<2.
+
 # --- upscaling ---------------------------------------------------------------
 clone https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git      ComfyUI-SeedVR2_VideoUpscaler
 

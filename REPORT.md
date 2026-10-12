@@ -729,6 +729,39 @@ rebuild.
 Worth noting the whitelist compounds with this: with packs disabled `/object_info` is
 3,190,770 bytes instead of 3,554,279 before compression, and 389 KB after.
 
+
+### SeedVR2 bulk upscale workflow (handoff/SEEDVR2_BULK_HANDOFF.md)
+
+Shipped `Naxci1-SeedVR2.5-Auto-Manuel-BULK.json` (28 nodes / 33 links) plus everything it
+needs, so a user can multi-select local videos, queue once, and download a ZIP of the
+results:
+
+* **`bulk_io`** -- our own pack (§4), COPYed rather than cloned: `BulkVideoUpload`
+  (multi-file picker -> ComfyUI's own `POST /upload/image`) and `DownloadAllZip`
+  (one-click ZIP of the output folder). Its `web/bulk_io.js` renders both buttons.
+* **`ComfyUI-BatchFolderTools`** -- `FolderVideoLoader_BFT` (folder iterator) +
+  `QueueNext_BFT` (self-requeue, so one Queue Prompt walks the batch).
+* **`ComfyMath`** -- `CM_IntToFloat` / `CM_FloatToInt`.
+* **SeedVR2 cache patch** (`build/patch-seedvr2.sh`, §5): rewrites the truthiness tests in
+  `src/core/model_configuration.py` to `is not None`. Unpatched, the *second* run in a
+  batch raises `TypeError: CompatibleDiT does not support len()` because a torch.compile'd
+  OptimizedModule's `__len__` throws.
+* **DVB deliberately absent**: the workflow replaces its For-Each nodes, and it pins
+  numpy<2.
+
+Widget values verified against §6.2: `cache_model=true` on both SeedVR2 loaders,
+`attention_mode="sdpa"` (note `flash_attn` is not a valid option), `format="video/h264-mp4"`
+(no NVENC on this box, so an nvenc format writes a 0-byte file), `batch_size=5` (must be
+4n+1), and `SeedVR2TorchCompileSettings` bypassed (mode 4). The upscaler carries the current
+12-widget signature, so no drift.
+
+`verify-env.sh` now asserts the packs, the `cv2` import, the patch, the classes
+(`BulkVideoUpload`, `DownloadAllZip`, `FolderVideoLoader_BFT`, `QueueNext_BFT`,
+`CM_IntToFloat`, `CM_FloatToInt`, `JoinStrings`), the workflow file, and that DVB is absent
+-- 19 checks in total.
+
+The `PPIO_LIMIT_NODES` whitelist is now the union of both shipped workflows' packs (15).
+
 ### Prewarms created
 
 Image `docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568` (83.00 GB, resolved
