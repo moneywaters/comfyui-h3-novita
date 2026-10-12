@@ -6,7 +6,9 @@
 # server. Use this one when you have a working API key.
 #
 # Running it with no arguments opens a dropdown of the locations that have a 4090
-# AVAILABLE right now, and launches a 4090 SPOT instance in whichever one you pick.
+# AVAILABLE right now, and launches a 4090 instance in whichever one you pick.
+# On-demand is the default because spot never allocates on PPIO; override with
+# PPIO_BILLING=spot if you want to try spot anyway.
 #
 #   ./ppio-api.sh                               pick a location, launch (default)
 #   ./ppio-api.sh menu                          same, explicitly
@@ -37,7 +39,7 @@ B="${PPIO_API_BASE:-https://api.ppio.com/gpu-instance/openapi/v1}"
 IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568}"
 CLUSTER="${PPIO_CLUSTER:-us-ca-6}"
 WANT="${PPIO_WANT:-4090}"
-BILLING="${PPIO_BILLING:-spot}"
+BILLING="${PPIO_BILLING:-onDemand}"
 ROOTFS="${PPIO_ROOTFS:-200}"
 NAME="${PPIO_NAME:-seedhunter-ppio}"
 # PPIO exposes these four 4090 SKUs under billingMethod=spot
@@ -177,7 +179,7 @@ PY
 )
     if [ -z "$items" ] || [ "$items" = "[]" ]; then
       echo
-      echo "No location currently has a $WANT available for deployment."
+      echo "No location currently has a $WANT available for $BILLING deployment."
       echo "The prewarm is done, so a launch will be fast whenever capacity appears."
       echo "Poll for it with:  $SELF --wait"
       exit 1

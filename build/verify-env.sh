@@ -40,6 +40,29 @@ echo "  $w workflow(s)"
 for f in /opt/ComfyUI/user/default/workflows/*.json; do echo "    $(basename "$f")"; done
 [ "$w" -ge 1 ] || { echo "  BAD: no workflows"; FAIL=$((FAIL+1)); }
 
+
+echo "=== workflow model references ==="
+WF=/opt/ComfyUI/user/default/workflows/Minimax_Seed_Hunter_v2.5.1.json
+if [ ! -f "$WF" ]; then
+    echo "  BAD v2.5.1 workflow missing"; FAIL=$((FAIL+1))
+else
+    # image A ships fl2va + Singularity; the Comfy-Org ref2va lives in image B, so a
+    # workflow referencing it cannot run here. This has silently-ish regressed before
+    # (a stray file copy overwrote a fix), so assert it.
+    if grep -q 'minimax_h3_ref2va_pruned_int8_convrot.safetensors' "$WF"; then
+        echo "  BAD workflow references ref2va_org, which is NOT in this image"
+        FAIL=$((FAIL+1))
+    else
+        echo "  OK  no ref2va_org reference"
+    fi
+    grep -q 'minimax_h3_fl2va_pruned_int8_convrot.safetensors' "$WF" \
+        && echo "  OK  references fl2va (present)" \
+        || { echo "  BAD workflow does not reference fl2va"; FAIL=$((FAIL+1)); }
+    grep -q 'Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors' "$WF" \
+        && echo "  OK  references Singularity (present)" \
+        || echo "  WARN no Singularity reference"
+fi
+
 echo "=== sshd ==="
 test -x /usr/sbin/sshd && echo "  OK sshd present" || { echo "  BAD sshd missing"; FAIL=$((FAIL+1)); }
 

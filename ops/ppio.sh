@@ -3,12 +3,14 @@
 # Mirrors ops/novita.sh, but PPIO's access is OAuth-via-MCP (see ppio_mcp.py) rather
 # than an API key, because the supplied PPIO key is rejected with 401 "key not found".
 #
-# Running it with no arguments opens a dropdown menu of the locations that have a 4090,
-# and launches a 4090 SPOT instance in whichever one you pick.
+# Running it with no arguments opens a dropdown of the locations that have a 4090
+# AVAILABLE right now, and launches a 4090 instance in whichever one you pick.
+# On-demand is the default because spot never allocates on PPIO; override with
+# PPIO_BILLING=spot if you want to try spot anyway.
 #
-#   ./ppio.sh                                   pick a location, launch 4090 spot (default)
+#   ./ppio.sh                                   pick a location, launch (default)
 #   ./ppio.sh menu                              same, explicitly
-#   ./ppio.sh --wait                            poll us-ca-6 for 4090 capacity, then launch
+#   ./ppio.sh --wait                            poll us-ca-6 for 4090, then launch
 #   ./ppio.sh launch [cluster] [4090]           launch without the menu
 #   ./ppio.sh clusters                          list clusters (and whether they have a 4090)
 #   ./ppio.sh products [4090] [spot|onDemand|monthly]
@@ -34,7 +36,7 @@ SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568}"
 CLUSTER="${PPIO_CLUSTER:-us-ca-6}"
 WANT="${PPIO_WANT:-4090}"
-BILLING="${PPIO_BILLING:-spot}"
+BILLING="${PPIO_BILLING:-onDemand}"
 ROOTFS="${PPIO_ROOTFS:-200}"
 NAME="${PPIO_NAME:-seedhunter-ppio}"
 # PPIO exposes these four 4090 SKUs under billingMethod=spot
@@ -166,7 +168,7 @@ async () => {
 }")
     if [ -z "$items" ] || [ "$items" = "[]" ]; then
       echo
-      echo "No location currently has a $WANT available for deployment."
+      echo "No location currently has a $WANT available for $BILLING deployment."
       echo "The prewarm is done, so a launch will be fast whenever capacity appears."
       echo "Poll for it with:  $SELF --wait"
       exit 1
