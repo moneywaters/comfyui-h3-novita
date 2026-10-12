@@ -572,10 +572,19 @@ and only 3 × `304`. That is what a **cache-disabled automation context** looks 
 I could not rule that out from here, so I am not claiming the browser-cache win is proven
 in a real browser — only that the response headers now permit it.
 
-A real gap I did find: these responses carry **no `ETag` and no `Last-Modified`**, so
-conditional requests are impossible (asking with either header just returns `200` again).
-`max-age` alone is what has to carry the whole win. Adding validators would give a 304
-fallback path that works even when a client revalidates.
+There are two classes of asset here, and they differ:
+
+* **Core assets** (anything served by ComfyUI's own `web.static`, i.e. the frontend bundle)
+  carry `ETag` + `Last-Modified` and honour conditional requests — verified:
+  `If-None-Match: "18ddc2510546f000-ca2"` returns **304** with a 0-byte body. So these
+  have a working revalidation fallback.
+* **Pixaroma's 419 modules** (served by its own custom route) carry `max-age` but
+  **no `ETag` and no `Last-Modified`** — asking with either header returns a full `200`
+  again. `max-age` alone has to carry those, with no 304 fallback.
+
+So the honest position: the headers on every asset now permit caching, and core assets
+additionally revalidate correctly. Whether a real browser takes the win is the part I
+could not confirm from here — see above.
 
 ### Instance start-up: ~10 minutes before anything is listening
 
