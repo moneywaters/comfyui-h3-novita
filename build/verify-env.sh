@@ -46,21 +46,55 @@ WF=/opt/ComfyUI/user/default/workflows/Minimax_Seed_Hunter_v2.5.1.json
 if [ ! -f "$WF" ]; then
     echo "  BAD v2.5.1 workflow missing"; FAIL=$((FAIL+1))
 else
-    # image A ships fl2va + Singularity; the Comfy-Org ref2va lives in image B, so a
-    # workflow referencing it cannot run here. This has silently-ish regressed before
-    # (a stray file copy overwrote a fix), so assert it.
-    if grep -q 'minimax_h3_ref2va_pruned_int8_convrot.safetensors' "$WF"; then
-        echo "  BAD workflow references ref2va_org, which is NOT in this image"
-        FAIL=$((FAIL+1))
-    else
-        echo "  OK  no ref2va_org reference"
-    fi
-    grep -q 'minimax_h3_fl2va_pruned_int8_convrot.safetensors' "$WF" \
-        && echo "  OK  references fl2va (present)" \
-        || { echo "  BAD workflow does not reference fl2va"; FAIL=$((FAIL+1)); }
-    grep -q 'Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors' "$WF" \
-        && echo "  OK  references Singularity (present)" \
-        || echo "  WARN no Singularity reference"
+    # Image A ships fl2va + Singularity; the Comfy-Org ref2va lives in image B, so a
+    # loader pointing at it cannot run here. This regressed once when a stray file copy
+    # overwrote the fix, so assert it.
+    #
+    # Check LOADER VALUES only, via the parser: the workflow also carries a markdown
+    # note that links to the ref2va model, and a plain grep for the name matches that
+    # text and reports a false failure (it did exactly that on the first run).
+    python3 - "$WF" <<'PY' || FAIL=$((FAIL+1))
+import json, sys
+
+BAD = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+WANT = ["minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors"]
+FIELDS = ("unet_name", "vae_name", "clip_name", "lora_name", "tiny_vae")
+
+wf = json.load(open(sys.argv[1]))
+vals, seen = [], set()
+
+def walk(o):
+    if isinstance(o, dict):
+        if id(o) in seen:
+            return
+        seen.add(id(o))
+        named = o.get("widgets_values_named") or {}
+        for f in FIELDS:
+            v = named.get(f)
+            if isinstance(v, str):
+                vals.append(v)
+        arr = o.get("widgets_values")
+        if isinstance(arr, list):
+            vals.extend(x for x in arr if isinstance(x, str) and x.endswith(".safetensors"))
+        for x in o.values():
+            walk(x)
+    elif isinstance(o, list):
+        for x in o:
+            walk(x)
+
+walk(wf)
+bad = sorted({v for v in vals if v == BAD})
+missing = [m for m in WANT if m not in vals]
+
+if bad:
+    print("  BAD loader points at ref2va_org (image B's model): %s" % bad)
+if missing:
+    print("  BAD workflow does not load: %s" % missing)
+if not bad and not missing:
+    print("  OK  loaders use fl2va + Singularity (%d loader values checked)" % len(set(vals)))
+sys.exit(1 if (bad or missing) else 0)
+PY
 fi
 
 echo "=== sshd ==="
