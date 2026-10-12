@@ -394,6 +394,27 @@ treats pricing/availability as dynamic data. It carries no prewarm or spot detai
 `as-sgp-2`, `cn-south-1`, `eu-gb-1`, `eu-ger-2`, `jp-tyo-2`, `oc-au-1`, `sa-br-1`,
 `us-ca-6`.
 
+
+### ops/ppio_pick.py and the TTY rules it had to learn
+
+The picker is a dependency-free arrow-key menu (`fzf`, `dialog` and `whiptail` are all
+absent). Three things bit it, all worth remembering for any interactive shell tool:
+
+* **The UI cannot go to stdout.** The caller captures the picker with `$(...)`, which
+  makes stdout a *pipe* — the menu would be swallowed into the variable rather than
+  shown. So the menu is drawn on `/dev/tty` and only the chosen id goes to stdout.
+* **`/dev/tty` is not seekable.** A single `open("/dev/tty", "r+")` raises
+  `UnsupportedOperation: File or stream is not seekable`; it must be opened twice, once
+  for read and once for write. Raw mode set through the read handle still applies to the
+  terminal as a whole, because termios state is per-tty, not per-fd.
+* **Read keys as raw bytes.** A text-mode handle applies universal-newline translation,
+  which rewrites a CR keypress so Enter never matches `"\r"` and the menu looks like it
+  ignores Enter (verified: LF selected, CR did nothing). `os.read(fd, 1)` fixes it.
+
+Verified through a real pty: Down/Down/Enter and a digit jump both land on the right row,
+`q` cancels with exit 130, and with no terminal the picker says to pass a location
+explicitly rather than hanging.
+
 ### Prewarms created
 
 Image `docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568` (83.00 GB, resolved
@@ -413,9 +434,8 @@ Quota is now 5 of 5. Three of the eight spot clusters (`eu-gb-1`, `oc-au-1`,
 
 ### ops/ppio.sh
 
-A PPIO counterpart to `ops/novita.sh`. **Running it bare launches a 4090 SPOT instance
-on `us-ca-6`** — `--wait` polls for capacity first, and `PPIO_CLUSTER` / `PPIO_WANT`
-override the target:
+A PPIO counterpart to `ops/novita.sh`. **Running it bare opens a dropdown menu of every
+location that has a 4090**, and launches a 4090 SPOT instance in whichever one you pick:
 
 ```bash
 ./ops/ppio.sh clusters                          # clusters, flagging the ones with a 4090
@@ -424,9 +444,10 @@ override the target:
 ./ops/ppio.sh prewarm [image] [cluster] [pids]  # create a prewarm
 ./ops/ppio.sh prewarm-wait <taskId>
 ./ops/ppio.sh instances
-./ops/ppio.sh                                   # launch 4090 spot on us-ca-6 (default)
+./ops/ppio.sh                                   # pick a location, launch 4090 spot (default)
+./ops/ppio.sh menu                              # same, explicitly
 ./ops/ppio.sh --wait                            # poll us-ca-6 for 4090, then launch
-./ops/ppio.sh launch [cluster] [4090]           # start a 4090 SPOT instance
+./ops/ppio.sh launch [cluster] [4090]           # skip the menu
 ./ops/ppio.sh deploy-wait [cluster] [4090]      # poll for capacity, then create
 ./ops/ppio.sh create <cluster> <productId> [rootfs] [name]
 ./ops/ppio.sh status|ip|delete <instanceId>

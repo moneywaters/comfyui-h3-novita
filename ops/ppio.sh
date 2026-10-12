@@ -3,11 +3,13 @@
 # Mirrors ops/novita.sh, but PPIO's access is OAuth-via-MCP (see ppio_mcp.py) rather
 # than an API key, because the supplied PPIO key is rejected with 401 "key not found".
 #
-# Running it with no arguments LAUNCHES a 4090 SPOT instance on us-ca-6.
+# Running it with no arguments opens a dropdown menu of the locations that have a 4090,
+# and launches a 4090 SPOT instance in whichever one you pick.
 #
-#   ./ppio.sh                                   launch 4090 spot on us-ca-6  (default)
+#   ./ppio.sh                                   pick a location, launch 4090 spot (default)
+#   ./ppio.sh menu                              same, explicitly
 #   ./ppio.sh --wait                            poll us-ca-6 for 4090 capacity, then launch
-#   ./ppio.sh launch [cluster] [4090]           launch explicitly
+#   ./ppio.sh launch [cluster] [4090]           launch without the menu
 #   ./ppio.sh clusters                          list clusters (and whether they have a 4090)
 #   ./ppio.sh products [4090] [spot|onDemand|monthly]
 #                                               products with stock + region count
@@ -34,9 +36,9 @@ NAME="${PPIO_NAME:-seedhunter-ppio}"
 # PPIO exposes these four 4090 SKUs under billingMethod=spot
 SPOT_4090="4090.16c62g,4090.16c62g.os,4090.16c125g,4090.16c96g.v2"
 
-# Bare invocation launches; `--wait` polls for capacity first.
+# Bare invocation opens the picker; `--wait` polls for capacity first.
 case "${1:-}" in
-  "")           set -- launch      "$CLUSTER" "$WANT" ;;
+  "")           set -- menu ;;
   --wait)       set -- deploy-wait "${2:-$CLUSTER}" "${3:-$WANT}" ;;
   --status)     set -- instances ;;
 esac
@@ -136,6 +138,43 @@ for i in d:
     print('  %-26s %-10s %-18s %-9s %s' % (i['id'],str(i['status']),str(i['product']),str(i['billing']),i['image']))
     for p in (i.get('ports') or []):
         if p.get('endpoint'): print('      %s/%s -> %s' % (p.get('port'),p.get('type'),p.get('endpoint')))"
+    ;;
+
+  menu)
+    echo "== checking which locations have a $WANT ==" >&2
+    # one MCP round trip: enumerate clusters, then price each in turn inside the JS
+    items=$(pp "
+async () => {
+  const cl = await api.request({method:'GET', path:'/openapi/v1/clusters', apiProduct:'gpu'});
+  const rows = (cl.data && cl.data.data) || [];
+  const withGpu = rows.filter(c => (c.availableGpuType||[]).some(t => new RegExp($(jsq "$WANT")).test(t)));
+  const out = [];
+  for (const c of withGpu) {
+    const p = await api.request({method:'GET', path:'/openapi/v1/products', apiProduct:'gpu',
+                                  query:{ clusterId: c.id, gpuNum: 1 }});
+    const pr = (p.data && p.data.data) || [];
+    const h = pr.filter(x => new RegExp($(jsq "$WANT")).test(x.name||''));
+    out.push({ id: c.id, name: c.name, skus: h.length,
+               deployable: h.filter(x => x.availableDeploy).length });
+  }
+  out.sort((a,b) => b.deployable - a.deployable || a.id.localeCompare(b.id));
+  return out;
+}")
+    [ -z "$items" ] && { echo "no location offers a $WANT"; exit 1; }
+    menu_json=$(echo "$items" | python3 -c "
+import json,sys
+rows=json.load(sys.stdin)
+out=[]
+for r in rows:
+    live = (str(r['deployable'])+' deployable') if r['deployable'] else 'no capacity now'
+    out.append({'id': r['id'],
+                'label': '%-18s %-24s %d SKUs  %s' % (r['id'], r['name'], r['skus'], live)})
+print(json.dumps(out, ensure_ascii=False))
+")
+    pick=$(python3 "$HERE/ppio_pick.py" "$menu_json") || exit $?
+    [ -z "$pick" ] && exit 1
+    echo
+    exec "$0" launch "$pick" "$WANT"
     ;;
 
   launch)
