@@ -415,6 +415,43 @@ Verified through a real pty: Down/Down/Enter and a digit jump both land on the r
 `q` cancels with exit 130, and with no terminal the picker says to pass a location
 explicitly rather than hanging.
 
+
+### ops/ppio-api.sh — the REST variant
+
+`ops/ppio.sh` reaches PPIO through the OAuth MCP server because the first API key was
+rejected. That key has since been replaced with a working one, so `ops/ppio-api.sh`
+does the same job over plain REST:
+
+```
+https://api.ppio.com/gpu-instance/openapi/v1    Authorization: Bearer $PPIO_API_KEY
+```
+
+Identical command surface, no MCP, no OAuth, no `ppio_mcp.py` — just `curl`. It reuses
+`ppio_pick.py` for the menu, so `questionary` is still required. The key defaults to the
+one in the script and can be overridden with `PPIO_API_KEY`.
+
+**Spot vs on-demand is the thing that matters here.** For the same cluster and SKU the
+two disagrees, and querying `/products` without `billingMethod` reports *on-demand*
+availability — which is why an earlier launch said `4090.16c62g deploy=True` and then got
+`INSUFFICIENT_RESOURCE`:
+
+| cluster `us-ca-6`, SKU `4090.16c62g` | `availableDeploy` |
+|---|---|
+| `billingMethod=spot` | **false** |
+| `billingMethod=onDemand` | **true** |
+
+So every availability check now passes `billingMethod` (default `spot`, overridable with
+`PPIO_BILLING`), and `create` uses the same billing mode it checked. On-demand genuinely
+allocates in us-ca-6; spot does not.
+
+### Two portability traps
+
+* **`$0` is not a path.** With `sh ppio.sh` (a bare relative name) `exec "$0"` searches
+  `PATH` and dies with `exec: ppio.sh: not found`. Both scripts now compute
+  `SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"` and re-invoke through that.
+* **No bash 4 syntax.** macOS ships bash 3.2, so `${VAR^^}` fails with
+  `bad substitution` under `sh`. Use the plain value.
+
 ### Prewarms created
 
 Image `docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568` (83.00 GB, resolved

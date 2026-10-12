@@ -28,9 +28,13 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# absolute path to this script: "$0" may be a bare relative name like
+# "ppio.sh" (e.g. `sh ppio.sh`), which exec would look up in PATH and miss
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568}"
 CLUSTER="${PPIO_CLUSTER:-us-ca-6}"
 WANT="${PPIO_WANT:-4090}"
+BILLING="${PPIO_BILLING:-spot}"
 ROOTFS="${PPIO_ROOTFS:-200}"
 NAME="${PPIO_NAME:-seedhunter-ppio}"
 # PPIO exposes these four 4090 SKUs under billingMethod=spot
@@ -152,7 +156,7 @@ async () => {
   const out = [];
   for (const c of withGpu) {
     const p = await api.request({method:'GET', path:'/openapi/v1/products', apiProduct:'gpu',
-                                  query:{ clusterId: c.id, gpuNum: 1 }});
+                                  query:{ clusterId: c.id, gpuNum: 1, billingMethod: $(jsq "$BILLING") }});
     const pr = (p.data && p.data.data) || [];
     const live = pr.filter(x => new RegExp($(jsq "$WANT")).test(x.name||'') && x.availableDeploy);
     if (live.length) out.push({ id: c.id, name: c.name, deployable: live.map(x => x.id) });
@@ -164,7 +168,7 @@ async () => {
       echo
       echo "No location currently has a $WANT available for deployment."
       echo "The prewarm is done, so a launch will be fast whenever capacity appears."
-      echo "Poll for it with:  $0 --wait"
+      echo "Poll for it with:  $SELF --wait"
       exit 1
     fi
     menu_json=$(echo "$items" | python3 -c "
@@ -179,7 +183,7 @@ print(json.dumps(out, ensure_ascii=False))
     pick=$(python3 "$HERE/ppio_pick.py" "$menu_json") || exit $?
     [ -z "$pick" ] && exit 1
     echo
-    exec "$0" launch "$pick" "$WANT"
+    exec "$SELF" launch "$pick" "$WANT"
     ;;
 
   launch)
@@ -197,7 +201,7 @@ async () => {
     CL="$cluster" WANT="$want" pp "
 async () => {
   const r = await api.request({method:'GET', path:'/openapi/v1/products', apiProduct:'gpu',
-                                query:{ clusterId: $(jsq "$cluster"), gpuNum: 1 }});
+                                query:{ clusterId: $(jsq "$cluster"), gpuNum: 1, billingMethod: $(jsq "$BILLING") }});
   const rows = (r.data && r.data.data) || [];
   return rows.filter(x => new RegExp($(jsq "$want")).test(x.name||''))
              .map(x => ({id:x.id, deploy:x.availableDeploy}));
@@ -207,24 +211,24 @@ for p in d: print('     %-22s deploy=%s' % (p['id'], p['deploy']))" 2>/dev/null
     prod=$(CL="$cluster" WANT="$want" pp "
 async () => {
   const r = await api.request({method:'GET', path:'/openapi/v1/products', apiProduct:'gpu',
-                                query:{ clusterId: $(jsq "$cluster"), gpuNum: 1 }});
+                                query:{ clusterId: $(jsq "$cluster"), gpuNum: 1, billingMethod: $(jsq "$BILLING") }});
   const rows = (r.data && r.data.data) || [];
   const ok = rows.filter(x => new RegExp($(jsq "$want")).test(x.name||'') && x.availableDeploy);
   return ok.length ? ok[0].id : '';
 }" 2>/dev/null | tr -d '\"')
     if [ -z "$prod" ]; then
       echo "   -> no $want deployable in $cluster right now"
-      echo "   poll for capacity with: $0 deploy-wait $cluster $want"
+      echo "   poll for capacity with: $SELF deploy-wait $cluster $want"
       exit 1
     fi
-    echo "   creating SPOT instance on $prod"
-    out=$("$0" create "$cluster" "$prod" "$ROOTFS" "$NAME" 2>&1)
+    echo "   creating $BILLING instance on $prod"
+    out=$("$SELF" create "$cluster" "$prod" "$ROOTFS" "$NAME" 2>&1)
     echo "$out"
     case "$out" in
       *'"id"'*) ;;
       *) echo
          echo "   create refused (spot capacity is advertised then lost, as on Novita)."
-         echo "   retry with: $0 deploy-wait $cluster $want"
+         echo "   retry with: $SELF deploy-wait $cluster $want"
          exit 1;;
     esac
     ;;
@@ -235,13 +239,13 @@ async () => {
       prods=$(CL="$cluster" WANT="$want" pp "
 async () => {
   const r = await api.request({method:'GET', path:'/openapi/v1/products', apiProduct:'gpu',
-                                query:{ clusterId: $(jsq "$cluster"), gpuNum: 1 }});
+                                query:{ clusterId: $(jsq "$cluster"), gpuNum: 1, billingMethod: $(jsq "$BILLING") }});
   const rows = (r.data && r.data.data) || [];
   return rows.filter(x => new RegExp($(jsq "$want")).test(x.name||'') && x.availableDeploy).map(x => x.id);
 }" 2>/dev/null | tr -d '[]\"' | tr ',' ' ')
       echo "[$(date +%H:%M:%S)] cycle $i deployable: ${prods:-none}"
       for pid in $prods; do
-        resp=$("$0" create "$cluster" "$pid" "$ROOTFS" "$NAME" 2>&1)
+        resp=$("$SELF" create "$cluster" "$pid" "$ROOTFS" "$NAME" 2>&1)
         echo "   $pid -> $resp"
         case "$resp" in *'"id"'*) echo CREATED; exit 0;; esac
         sleep 20
@@ -259,7 +263,7 @@ async () => {
     name: $(jsq "$name"), productId: $(jsq "$product"), gpuNum: 1,
     rootfsSize: parseInt($(jsq "$rootfs"), 10), imageUrl: $(jsq "$IMAGE"),
     ports: '22/tcp,8188/http', kind: 'gpu', clusterId: $(jsq "$cluster"),
-    billingMode: 'spot', month: 0,
+    billingMode: $(jsq "$BILLING"), month: 0,
   };
   const r = await api.request({method:'POST', path:'/openapi/v1/gpu/instance/create', apiProduct:'gpu', body});
   return r.data;
@@ -295,6 +299,6 @@ async () => (await api.request({method:'POST', path:'/openapi/v1/gpu/instance/de
     echo
     ;;
 
-  help|-h|--help) sed -n '6,25p' "$0"; exit 0;;
-  *) echo "unknown command: $1" >&2; echo; sed -n '6,25p' "$0" >&2; exit 2;;
+  help|-h|--help) sed -n '6,26p' "$SELF"; exit 0;;
+  *) echo "unknown command: $1" >&2; echo; sed -n '6,26p' "$SELF" >&2; exit 2;;
 esac
