@@ -601,6 +601,62 @@ which is why "running" in the console does not mean "usable". The measured phase
 Prewarming did not remove the ~10 minutes, only the image-download part of it. That is
 worth setting expectations against: a fresh instance is ~10 min from click to usable.
 
+
+### Limiting loaded custom nodes without a rebuild (PPIO `command`)
+
+Goal: fewer extension requests by loading only the packs Seed Hunter v2.5.1 needs.
+Answer: **no rebuild needed** — the PPIO create API's `command` field overrides the image
+CMD, so the flags can be passed at instance-creation time.
+
+Two traps, both hit and both now handled:
+
+1. **`--whitelist-custom-nodes` is `nargs='+'` — SPACE separated, not commas.**
+   ```python
+   # comfy/cli_args.py:216
+   parser.add_argument("--whitelist-custom-nodes", type=str, nargs='+', default=[], ...)
+   ```
+   Passing `"A,B,C"` makes it ONE entry that matches no directory, so ComfyUI logs
+   `Skipping ...` for *every* pack — including the ones you meant to keep. The whole
+   server comes up with zero custom nodes.
+2. **`command` replaces `/opt/start.sh`, which is what starts sshd** and does the runtime
+   key injection. So a bare ComfyUI command line silently costs you SSH. The replacement
+   therefore starts sshd itself; the key is already baked into the image's
+   `/root/.ssh/authorized_keys` (verified: 1 line), so SSH still works.
+
+Working form (452 chars, well under the 2047 limit), with `entrypoint` left alone so
+`tini --` still reaps:
+
+```
+command: /bin/bash -c "cd /opt/ComfyUI && /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config &          exec /opt/comfyui-venv/bin/python3 main.py --listen 0.0.0.0 --port 8188          --preview-method auto --disable-all-custom-nodes --whitelist-custom-nodes          <pack dirs, space separated>"
+```
+
+**Verified on a throwaway as-sgp-2 instance** (created, measured, deleted; the live
+us-ca-6 instance was never touched):
+
+| | with flags | without |
+|---|---|---|
+| extension scripts | **185** | 319 |
+| workflow node types resolving | **53 / 53** | 53 / 53 |
+| SSH | open | open |
+| rebuild required | no | — |
+
+The whitelist holds exactly the ten packs the workflow uses, nothing else:
+
+```
+ComfyUI-Easy-Use  ComfyUI-Fantastic-MiniMaxH3-PromptBuilder  ComfyUI-H3-Prompt-IDE
+ComfyUI-KJNodes   ComfyUI-MiniMaxH3Mod   ComfyUI-Pixaroma   ComfyUI-VFI
+ComfyUI-VideoHelperSuite  Comfyui_Minimax_h3_latent_Upscaler  ControlAltAI-Nodes
+```
+
+`ComfyUI_MinimaxH3HybridLoader` is deliberately *not* in the list: the image ships it, but
+the workflow contains no `Hybrid` node at all (grep count 0) — the subgraph uses plain
+UNETLoader/CLIPLoader/VAELoader nodes.
+
+Wire it up with `PPIO_LIMIT_NODES=1 ./ops/ppio-api.sh launch us-ca-6`.
+
+Caveat: this disables ComfyUI-Manager too, so the Manager panel is gone. That is the point
+of "nothing else", but it means no in-browser node installation on that instance.
+
 ### Prewarms created
 
 Image `docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568` (83.00 GB, resolved

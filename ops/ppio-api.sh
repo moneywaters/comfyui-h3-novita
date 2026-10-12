@@ -40,6 +40,13 @@ IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-57e1cbb32e69}"
 CLUSTER="${PPIO_CLUSTER:-us-ca-6}"
 WANT="${PPIO_WANT:-4090}"
 BILLING="${PPIO_BILLING:-onDemand}"
+# Set PPIO_LIMIT_NODES=1 to start ComfyUI with --disable-all-custom-nodes plus a whitelist
+# of ONLY the packs the Seed Hunter v2.5.1 workflow needs. Verified: 319 -> 185 extension
+# scripts, all 53 workflow node types still resolve, no image rebuild required.
+# NOTE: --whitelist-custom-nodes is argparse nargs='+' (SPACE separated). A comma-joined
+# string becomes ONE bogus entry and ComfyUI then skips EVERY custom node.
+LIMIT_NODES="${PPIO_LIMIT_NODES:-0}"
+WHITELIST="${PPIO_WHITELIST:-ComfyUI-Easy-Use ComfyUI-Fantastic-MiniMaxH3-PromptBuilder ComfyUI-H3-Prompt-IDE ComfyUI-KJNodes ComfyUI-MiniMaxH3Mod ComfyUI-Pixaroma ComfyUI-VFI ComfyUI-VideoHelperSuite Comfyui_Minimax_h3_latent_Upscaler ControlAltAI-Nodes}"
 ROOTFS="${PPIO_ROOTFS:-200}"
 NAME="${PPIO_NAME:-seedhunter-ppio}"
 # PPIO exposes these four 4090 SKUs under billingMethod=spot
@@ -244,11 +251,24 @@ print(' '.join(p['id'] for p in (d.get('data') or [])
 
   create)
     cluster="${2:-$CLUSTER}"; product="${3:?productId}"; rootfs="${4:-$ROOTFS}"; name="${5:-$NAME}"
-    body=$(python3 -c "
-import json
-print(json.dumps({'name':'$name','productId':'$product','gpuNum':1,'rootfsSize':int('$rootfs'),
-                  'imageUrl':'$IMAGE','ports':'22/tcp,8188/http','kind':'gpu',
-                  'clusterId':'$cluster','billingMode':'$BILLING','month':0}))")
+    body=$(LIMIT_NODES="$LIMIT_NODES" WHITELIST="$WHITELIST" python3 - "$name" "$product" "$rootfs" "$IMAGE" "$cluster" "$BILLING" <<'BODYEOF'
+import json, os, sys
+name, product, rootfs, image, cluster, billing = sys.argv[1:7]
+b = {"name": name, "productId": product, "gpuNum": 1, "rootfsSize": int(rootfs),
+     "imageUrl": image, "ports": "22/tcp,8188/http", "kind": "gpu",
+     "clusterId": cluster, "billingMode": billing, "month": 0}
+if os.environ.get("LIMIT_NODES") == "1":
+    # Overrides the image CMD (/opt/start.sh). ENTRYPOINT stays `tini --`, so signal
+    # handling is kept; sshd is started explicitly because start.sh is bypassed. The SSH
+    # key is already baked into the image's /root/.ssh/authorized_keys, so it still works.
+    inner = ("cd /opt/ComfyUI && /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config & "
+             "exec /opt/comfyui-venv/bin/python3 main.py --listen 0.0.0.0 --port 8188 "
+             "--preview-method auto --disable-all-custom-nodes --whitelist-custom-nodes "
+             + os.environ["WHITELIST"])
+    b["command"] = "/bin/bash -c " + json.dumps(inner)
+print(json.dumps(b))
+BODYEOF
+)
     out=$(api -X POST -d "$body" "$B/gpu/instance/create"); warn_key "$out"; echo "$out"
     ;;
 
