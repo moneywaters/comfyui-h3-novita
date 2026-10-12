@@ -331,6 +331,85 @@ build breaks rather than shipping a UI that can hang on the logo.
 Not affected by this: the API, the WebSocket (works over HTTP/1.1), workflow
 execution, or image contents. This is purely the loading overlay.
 
+
+## PPIO (second GPU platform)
+
+PPIO sells the same SKU names as Novita (`4090.16c62g`, …) and its prewarm API is a
+near-copy: `POST /openapi/v1/image/prewarm` with
+`{imageUrl, repositoryAuth, clusterId, productIds, note}`, a **100 GB per-image cap**
+and a **5-task quota** (verified: `perImageSize: 100`, `limit: 5`).
+
+### Access is via MCP, not the API key
+
+The API key supplied for PPIO returns `401 UNAUTHORIZED / "key not found"` on every
+endpoint (`https://api.ppio.com/gpu-instance/openapi/v1/…`), including the correct
+base path — so it is not valid for this platform. It is not a header or base-path
+problem: bare `Authorization: <key>` yields `authorization not found` and other bases
+yield `404`, i.e. the route is right and the key is wrong.
+
+What does work is PPIO's **hosted MCP server**, which is OAuth-based rather than
+key-based:
+
+```bash
+cmd mcp add --transport http --scope user ppio https://mcp.ppio.com/mcp
+```
+
+It registers an OAuth client and completes the browser authorization automatically.
+Tokens land in `~/.commandcode/mcp-tokens.json` and refresh on their own. The server
+exposes two tools, `search` (query the OpenAPI spec) and `execute` (run JS against
+the API), so all PPIO work goes through `mcp__ppio__execute`.
+
+Two practical notes:
+
+* The MCP **truncates responses at ~6000 tokens**, and `/openapi/v1/products` returns
+  every GPU at once well past that. Filter inside the JS and return only what you need
+  (`rows.filter(x => /4090/.test(x.name))`) rather than fetching the whole list.
+* Its JSON can contain raw control characters, so a strict `json.loads` on a dumped
+  payload fails — parse leniently.
+
+### Skills
+
+PPIO publishes official skills; both are installed globally
+(`~/.commandcode/skills/{ppio-docs,ppio-sandbox}`):
+
+```bash
+cmd skills add PPIO/ppio-skills -s ppio-docs    --global
+cmd skills add PPIO/ppio-skills -s ppio-sandbox --global
+```
+
+`ppio-docs` is a reference/router skill (LLM, sandbox, GPU, integrations, FAQ); it
+defers to `https://raw.githubusercontent.com/PPIO/ppio-skills/main/skills/...` and
+treats pricing/availability as dynamic data. It carries no prewarm or spot detail.
+
+### 4090 spot landscape
+
+`billingMethod` is a query param on `/openapi/v1/products`. As of this run:
+
+| billingMethod | 4090 SKUs | deployable |
+|---|---|---|
+| `spot` | `4090.16c62g`, `4090.16c62g.os`, `4090.16c125g`, `4090.16c96g.v2` | none |
+| `onDemand` | + `4090.16c125g.nas` | `4090.16c62g`, `4090.16c62g.os` |
+
+25 clusters total, **14 carry a 4090**, and 8 of those are in the spot region list:
+`as-sgp-2`, `cn-south-1`, `eu-gb-1`, `eu-ger-2`, `jp-tyo-2`, `oc-au-1`, `sa-br-1`,
+`us-ca-6`.
+
+### Prewarms created
+
+Image `docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568` (83.00 GB, resolved
+server-side as `82995082446` bytes — under the cap), targeting the four 4090 spot SKUs:
+
+| cluster | location | id |
+|---|---|---|
+| `us-ca-6` | US-California-06 | `td4yl3iu5nntxphk` |
+| `as-sgp-2` | Asia-Singapore-02 | `jh6oxuvdqnt52wle` |
+| `jp-tyo-2` | Asia-Japan-02 | `6z2niercdkb9262h` |
+| `eu-ger-2` | Europe-Germany-02 | `juvqfm0ewybwf4ct` |
+| `cn-south-1` | China-South-01 | `4h5ufdtjlaaehl6l` |
+
+Quota is now 5 of 5. Three of the eight spot clusters (`eu-gb-1`, `oc-au-1`,
+`sa-br-1`) were left un-prewarmed for lack of slots.
+
 ## Prewarm state
 
 Quota is 5 tasks, and it is now full. Build A (`sha-289174e82568`) is prewarmed in
