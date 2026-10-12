@@ -97,6 +97,16 @@ sys.exit(1 if (bad or missing) else 0)
 PY
 fi
 
+echo "=== JS/CSS cacheable ==="
+CM=$(ls /opt/ComfyUI/middleware/cache_middleware.py 2>/dev/null | head -1)
+if [ -z "$CM" ]; then
+    echo "  BAD cache middleware missing"; FAIL=$((FAIL+1))
+elif grep -q 'public, max-age=86400' "$CM"; then
+    echo "  OK  JS/CSS served cacheable (repeat loads use the browser cache)"
+else
+    echo "  BAD JS/CSS still no-store: every page load re-fetches ~690 modules"; FAIL=$((FAIL+1))
+fi
+
 echo "=== sshd ==="
 test -x /usr/sbin/sshd && echo "  OK sshd present" || { echo "  BAD sshd missing"; FAIL=$((FAIL+1)); }
 

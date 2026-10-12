@@ -88,14 +88,25 @@ else
 fi
 
 echo "-- 4. capacity"
+# Prefer the SKU the current instance already holds: it is the one we know this cluster
+# can hand out, and after a delete it is the one most likely to be freed. Falling back to
+# the first 4090 row can pick a different SKU (e.g. 4090.16c125g) that the free card does
+# not satisfy, which would fail right after the delete -- exactly the gap we are avoiding.
+OLD_PROD=""
+if [ -n "$old" ]; then
+  OLD_PROD=$(api "$B/gpu/instance?instanceId=$old" | fmt "print(d.get('productId') or '')")
+  [ -n "$OLD_PROD" ] && echo "   current SKU: $OLD_PROD (will reuse it)"
+fi
 # Careful: while OUR instance holds the card, /products reports nothing deployable --
 # the capacity only appears once we delete it. So a running instance on this cluster is
 # itself the evidence that a card can be had, and we must not treat that as "no
 # capacity" or the swap could never run.
 prod=$(api "$B/products?gpuNum=1&billingMethod=$BILLING&clusterId=$CLUSTER" | fmt "
 rows=[p for p in (d.get('data') or []) if '$WANT' in str(p.get('name',''))]
+ids=[p['id'] for p in rows]
 live=[p['id'] for p in rows if p.get('availableDeploy')]
-print(live[0] if live else (rows[0]['id'] if rows else ''))")
+old='$OLD_PROD'
+print(old if old in ids else (live[0] if live else (ids[0] if ids else '')))")
 [ -z "$prod" ] && die "cluster $CLUSTER offers no $WANT product at all"
 if [ -n "$old" ]; then
   echo "   product: $prod  (deployable flag is false because our own instance holds it;"

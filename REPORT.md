@@ -499,6 +499,62 @@ cluster is itself the evidence, so the strict gate only applies when nothing is 
 `--dry-run` shows the full plan without touching anything; it refuses to swap onto a cold
 (non-prewarmed) image.
 
+
+### Why the GUI takes ~87s every time (and now won't)
+
+Measured a cold load on the new instance: **87 seconds, 828 requests**, broken down as
+**693 Script** + 155 Fetch + 23 Image. ComfyUI's cache middleware is the cause:
+
+```python
+# middleware/cache_middleware.py
+if request.path.endswith(".js") or request.path.endswith(".css") or is_entry_point:
+    response.headers.setdefault("Cache-Control", "no-store")
+```
+
+**Every `.js` and `.css` is served `no-store`** (images get `max-age=86400`). ComfyUI does
+that so a frontend update lands immediately, but it means *nothing* is ever reused: each
+page load re-downloads all ~690 modules, and over a remote host's proxy at ~0.5-1s per
+request that is ~87s, every single time. It is not a one-off cost.
+
+Request attribution (of the 693 scripts):
+
+| source | requests |
+|---|---|
+| **ComfyUI-Pixaroma** | **419** |
+| frontend bundle | 62 |
+| rgthree-comfy | 53 *(workflow never uses it)* |
+| ComfyUI-Custom-Scripts | 37 *(unused)* |
+| ComfyUI-KJNodes | 26 |
+| cg-use-everywhere | 20 *(unused)* |
+| ComfyUI-Manager | 18 *(unused at runtime)* |
+| ComfyUI-Impact-Pack | 7 *(unused)* |
+
+Pixaroma alone is 60%: its `WEB_DIRECTORY="./js"` holds 91 subdirectories (89 `index.js`
+plus 330 `.mjs` shared modules) and `/extensions` lists every one, so the browser loads
+all of it even though the workflow touches only 5 of its node types.
+
+**Fix applied:** `build/patch-cache.sh` changes that branch to
+`public, max-age=86400`. Caching hard is safe *here specifically* because every instance
+gets its own hostname (`<instanceId>-8188.<cluster>.gpu-instance.<domain>`), so the
+browser cache is scoped to one instance — a new image is a new origin, so stale JS can
+never be served against a different build. First load still pays the download; every
+later one comes from cache.
+
+Not yet done: trimming Pixaroma's `js/` to the subdirectories the workflow needs
+(~11 of 91) would cut ~360 requests off even the *first* load. Left alone for now because
+it means deleting files inside a third-party pack and risking its widgets.
+
+### Why it doesn't start the instant the image is ready
+
+Measured on the previous swap: instance `createdAt` **09:13:26** → ComfyUI's python process
+start **09:23:33**. That is **10.1 minutes** during which the API already reported the
+instance as `running` — the status flips long before the container is serving. So the
+sequence is ~10 min of provisioning/pull/unpack with an optimistic `running` flag, then a
+~2s python start, then the ~87s page load.
+
+This is also why an earlier note in this report claiming a swap came up "in ~20 seconds"
+was wrong: that measured the API status, not readiness.
+
 ### Prewarms created
 
 Image `docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568` (83.00 GB, resolved
