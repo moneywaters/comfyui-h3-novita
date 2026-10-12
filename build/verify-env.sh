@@ -102,9 +102,17 @@ CM=$(ls /opt/ComfyUI/middleware/cache_middleware.py 2>/dev/null | head -1)
 if [ -z "$CM" ]; then
     echo "  BAD cache middleware missing"; FAIL=$((FAIL+1))
 elif grep -q 'public, max-age=86400' "$CM"; then
-    echo "  OK  JS/CSS served cacheable (repeat loads use the browser cache)"
+    echo "  OK  core JS/CSS served cacheable"
 else
-    echo "  BAD JS/CSS still no-store: every page load re-fetches ~690 modules"; FAIL=$((FAIL+1))
+    echo "  BAD core JS/CSS still no-store: every page load re-fetches ~690 modules"; FAIL=$((FAIL+1))
+fi
+PIXSR=$(ls /opt/ComfyUI/custom_nodes/*Pixaroma/server_routes.py 2>/dev/null | head -1)
+if [ -n "$PIXSR" ]; then
+    if grep -q 'public, max-age=86400' "$PIXSR"; then
+        echo "  OK  Pixaroma modules cacheable (that pack is 419 of the script requests)"
+    else
+        echo "  BAD Pixaroma still forces no-store on its 419 modules"; FAIL=$((FAIL+1))
+    fi
 fi
 
 echo "=== sshd ==="

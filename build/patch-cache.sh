@@ -51,3 +51,59 @@ else:
     print("patch-cache: no-store branch not found -- middleware shape changed upstream")
     raise SystemExit(1)
 PY
+
+# ---------------------------------------------------------------------------
+# ComfyUI-Pixaroma re-disables caching for its OWN files, and it accounts for 419 of
+# the ~693 script requests (91 js/ subdirs, 330 .mjs shared modules).
+#
+# Its server_routes.py explains the intent: an on_response_prepare hook mirrors core's
+# no-store for .mjs (core only matches .js), and a middleware stamps every relative
+# import with ?v=<plugin version>, so a plugin update invalidates the whole module tree
+# without the user hard-refreshing.
+#
+# That reasoning is about UPDATES to a long-lived server. Neither condition holds here:
+# every instance is its own origin (<instanceId>-8188.<cluster>.gpu-instance.<domain>),
+# and the plugin version is frozen into the image. A new build is a new instance is a
+# new origin, so a hard cache cannot go stale. The ?v= stamps still make each image's
+# module URLs unique, so caching them is safe.
+PIX=$(ls -d /opt/ComfyUI/custom_nodes/*Pixaroma 2>/dev/null | head -1)
+if [ -z "$PIX" ]; then
+    echo "patch-cache: ComfyUI-Pixaroma not installed; skipping its patch"
+    exit 0
+fi
+
+python3 - "$PIX/server_routes.py" <<'PY'
+import sys
+
+path = sys.argv[1]
+s = open(path, encoding="utf-8").read()
+
+CACHEABLE = 'response.headers["Cache-Control"] = "public, max-age=86400"'
+if CACHEABLE in s:
+    print("patch-cache: Pixaroma already patched")
+    raise SystemExit(0)
+
+# only inside _pixaroma_no_cache, so we never touch an unrelated assignment
+anchor = '''async def _pixaroma_no_cache(request, response):
+    p = request.path
+    if p.startswith(_PIX_PREFIX) and (p.endswith(".mjs") or p.endswith(".js")):
+        response.headers["Cache-Control"] = "no-store"'''
+
+replacement = '''async def _pixaroma_no_cache(request, response):
+    p = request.path
+    if p.startswith(_PIX_PREFIX) and (p.endswith(".mjs") or p.endswith(".js")):
+        # Deployment override: upstream sets no-store here so plugin updates land
+        # without a hard refresh. That reasoning needs a long-lived origin; ours is
+        # per-instance (<instanceId>-8188.<cluster>.gpu-instance.<domain>) with the
+        # plugin version frozen into the image, so a hard cache cannot go stale and
+        # re-fetching all ~419 modules on every load is pure waste.
+        response.headers["Cache-Control"] = "public, max-age=86400"'''
+
+if anchor in s:
+    s = s.replace(anchor, replacement, 1)
+    open(path, "w", encoding="utf-8").write(s)
+    print("patch-cache: Pixaroma modules now cacheable in %s" % path)
+else:
+    print("patch-cache: Pixaroma _pixaroma_no_cache not found -- pack changed upstream")
+    raise SystemExit(1)
+PY
