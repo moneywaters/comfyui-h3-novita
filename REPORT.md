@@ -452,6 +452,53 @@ allocates in us-ca-6; spot does not.
 * **No bash 4 syntax.** macOS ships bash 3.2, so `${VAR^^}` fails with
   `bad substitution` under `sh`. Use the plain value.
 
+
+### New tag: sha-a43885f9a8b4 (compiler + correct workflow)
+
+Two runtime failures prompted this build:
+
+**1. `RuntimeError: Failed to find C compiler`.** The Dockerfile had *deliberately*
+dropped gcc when SageAttention was removed, on the theory that nothing builds from source
+any more. That was wrong: Triton compiles its `CudaUtils` shim on first use, and on a 4090
+torch picks Triton impls for `_native` ops. It kills the entire H3 text-encode path:
+
+```
+MiniMaxH3ReferenceToVideo -> clip.encode -> llama.precompute_freqs_cis
+  -> torch._native.bmm_outer_product -> triton -> cc -> "Failed to find C compiler"
+```
+
+Fixed by installing `gcc g++ python3-dev` and asserting `cc --version` in the Dockerfile.
+
+**2. `ERROR: VAE is invalid: None` / `Value not in list`.** Two separate causes:
+
+* the baked workflow's `Load Models & Patches` subgraph pointed `UNETLoader` at
+  `minimax_h3_ref2va_pruned_int8_convrot` — the Comfy-Org model that lives in image B,
+  not A. Restored to fl2va + Singularity.
+* `taeh3` is a **preview** VAE (`models/vae_approx`); selecting it in a `VAELoader`
+  can only ever fail. It belongs in `ModelPreviewOverrideKJ.tiny_vae`, which is where the
+  correct workflow already puts it. The real VAEs are `minimax_h3_video_vae_int8_convrot`
+  and `minimax_h3_audio_vae_fp32`.
+
+`verify-env.sh` now parses the workflow and checks **loader values** across the graph and
+subgraph definitions. A first attempt grepped the file for the ref2va filename and failed
+the build on a false positive, because the workflow also carries a markdown note that
+links to that model.
+
+### ops/ppio-swap.sh
+
+Swapping onto a new image has an unavoidable window: the cluster has one free 4090, and
+the card only frees when the old instance is deleted — so deleting by hand and then typing
+the create leaves a gap someone else can take. `ppio-swap.sh` does every fallible check
+first (image resolves, prewarm is Succeeded, a product exists) and only then deletes and
+creates back-to-back in one process.
+
+A subtlety it encodes: while your own instance holds the card, `/products` reports nothing
+deployable, so a naive capacity check would refuse forever. A running instance on that
+cluster is itself the evidence, so the strict gate only applies when nothing is running.
+
+`--dry-run` shows the full plan without touching anything; it refuses to swap onto a cold
+(non-prewarmed) image.
+
 ### Prewarms created
 
 Image `docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568` (83.00 GB, resolved
