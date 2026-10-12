@@ -25,31 +25,27 @@ import sys
 path = sys.argv[1]
 s = open(path, encoding="utf-8").read()
 
-if "if cached_model is not None:" in s and "if cached_vae is not None:" in s:
-    print("patch-seedvr2: already patched")
-    raise SystemExit(0)
+OLD = "        if cached_model:\n"
+NEW = "        if cached_model is not None:\n"
 
-subs = [
-    ("        if cached_model:\n", "        if cached_model is not None:\n"),
-    ("        if cached_vae:\n",   "        if cached_vae is not None:\n"),
-]
-
-applied = 0
-for old, new in subs:
-    if old in s:
-        s = s.replace(old, new, 1)
-        applied += 1
-
-if applied == 0:
-    print("patch-seedvr2: neither truthiness test found -- source layout changed upstream")
+n = s.count(OLD)
+if n == 0:
+    if s.count(NEW):
+        print("patch-seedvr2: already patched (%d check(s))" % s.count(NEW))
+        raise SystemExit(0)
+    print("patch-seedvr2: no 'if cached_model:' truthiness test found -- layout changed")
     raise SystemExit(1)
 
+# NOTE: the upstream source reuses the SAME local name for both branches --
+#   cached_model = global_cache.get_dit(...)   ->  if cached_model:   (DiT)
+#   cached_model = global_cache.get_vae(...)   ->  if cached_model:   (VAE)
+# so there is no "if cached_vae:" to fix; the handoff's §5 snippet assumes one and
+# therefore only ever patched the first site. Replace ALL of them.
+s = s.replace(OLD, NEW)
 open(path, "w", encoding="utf-8").write(s)
-print("patch-seedvr2: applied %d/%d replacement(s)" % (applied, len(subs)))
+print("patch-seedvr2: patched %d truthiness check(s)" % n)
 
 for i, line in enumerate(open(path, encoding="utf-8"), 1):
-    if "cached_model" in line and "if " in line:
-        print("  %d: %s" % (i, line.rstrip()))
-    if "cached_vae" in line and "if " in line:
+    if "cached_model" in line and line.lstrip().startswith("if "):
         print("  %d: %s" % (i, line.rstrip()))
 PY

@@ -140,10 +140,14 @@ fi
 # the §5 cache patch
 SEEDCFG=/opt/ComfyUI/custom_nodes/ComfyUI-SeedVR2_VideoUpscaler/src/core/model_configuration.py
 if [ -f "$SEEDCFG" ]; then
-    if grep -q 'if cached_model is not None:' "$SEEDCFG" && grep -q 'if cached_vae is not None:' "$SEEDCFG"; then
-        echo "  OK  SeedVR2 cache patch applied"
+    # both the DiT and VAE branches use `if cached_model:` upstream, so assert that NO
+    # bare truthiness test survives -- checking for a cached_vae one would never match.
+    if grep -qE '^\s*if cached_model:\s*$' "$SEEDCFG"; then
+        echo "  BAD SeedVR2 still has a bare 'if cached_model:' (2nd run dies on len())"; FAIL=$((FAIL+1))
+    elif grep -q 'if cached_model is not None:' "$SEEDCFG"; then
+        echo "  OK  SeedVR2 cache patch applied ($(grep -c 'if cached_model is not None:' "$SEEDCFG") site(s))"
     else
-        echo "  BAD SeedVR2 cache_model truthiness test unpatched (2nd run dies on len())"; FAIL=$((FAIL+1))
+        echo "  BAD SeedVR2 cache patch not applied"; FAIL=$((FAIL+1))
     fi
 fi
 # the workflow itself

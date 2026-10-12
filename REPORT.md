@@ -762,6 +762,22 @@ Widget values verified against §6.2: `cache_model=true` on both SeedVR2 loaders
 
 The `PPIO_LIMIT_NODES` whitelist is now the union of both shipped workflows' packs (15).
 
+
+**The handoff's §5 snippet is wrong and only half-works.** It says to replace both
+`if cached_model:` and `if cached_vae:`. In the real source there is no `cached_vae` test —
+upstream reuses the SAME local name for both branches:
+
+```
+595:  cached_model = global_cache.get_dit(...)   ->  596:  if cached_model:   # DiT
+615:  cached_model = global_cache.get_vae(...)   ->  616:  if cached_model:   # VAE
+```
+
+So the snippet's second replacement matched nothing and only the DiT site was fixed, while
+the VAE site — the one that actually crashes a batch — stayed broken. `patch-seedvr2.sh`
+replaces **every** bare `if cached_model:` site (verified: 2 of 2, 0 remaining) and
+`verify-env.sh` asserts none survive. The first build failed precisely on that assertion,
+which is how this was caught rather than shipped.
+
 ### Prewarms created
 
 Image `docker.io/moneywaters/comfyui-h3-novita:sha-289174e82568` (83.00 GB, resolved
