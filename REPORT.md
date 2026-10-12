@@ -410,6 +410,45 @@ server-side as `82995082446` bytes — under the cap), targeting the four 4090 s
 Quota is now 5 of 5. Three of the eight spot clusters (`eu-gb-1`, `oc-au-1`,
 `sa-br-1`) were left un-prewarmed for lack of slots.
 
+
+### ops/ppio.sh
+
+A PPIO counterpart to `ops/novita.sh`, defaulting to `us-ca-6`:
+
+```bash
+./ops/ppio.sh clusters                          # clusters, flagging the ones with a 4090
+./ops/ppio.sh products 4090 spot                # stock + region count (also onDemand/monthly)
+./ops/ppio.sh prewarm-list                      # quota + tasks
+./ops/ppio.sh prewarm [image] [cluster] [pids]  # create a prewarm
+./ops/ppio.sh prewarm-wait <taskId>
+./ops/ppio.sh instances
+./ops/ppio.sh launch [cluster] [4090]           # start a 4090 SPOT instance, print the URL
+./ops/ppio.sh deploy-wait [cluster] [4090]      # poll for capacity, then create
+./ops/ppio.sh create <cluster> <productId> [rootfs] [name]
+./ops/ppio.sh status|ip|delete <instanceId>
+```
+
+Because there is no usable API key, it does not use curl. All calls go through
+`ops/ppio_mcp.py`, a small JSON-RPC client that reuses the MCP OAuth token from
+`~/.commandcode/mcp-tokens.json`; it prints the API `data` as JSON so the shell can
+format it exactly like a REST response. If the token is stale it says so and points
+at `cmd mcp auth ppio`.
+
+Two PPIO/MCP quirks it handles:
+
+* results are **doubly wrapped** — the JSON-RPC result's `content[0].text` is itself a
+  `{"content":[{"text": ...}]}` envelope, so a single unwrap yields an envelope string
+  rather than the value (this is what made the first version print
+  `string indices must be integers`)
+* the **~6000-token truncation**, so every subcommand filters inside the JS and returns
+  only the fields it prints
+
+**Spot behaves exactly like Novita's** — the platform advertises capacity it does not
+have. `products ... spot` and even `/products?clusterId=us-ca-6` report
+`availableDeploy: true` for `4090.16c62g` and `4090.16c62g.os`, yet
+`instance/create` comes straight back with `INSUFFICIENT_RESOURCE`. `launch` detects
+that refusal and points at `deploy-wait` rather than pretending it succeeded.
+
 ## Prewarm state
 
 Quota is 5 tasks, and it is now full. Build A (`sha-289174e82568`) is prewarmed in
