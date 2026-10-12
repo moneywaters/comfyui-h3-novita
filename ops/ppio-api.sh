@@ -261,7 +261,16 @@ if os.environ.get("LIMIT_NODES") == "1":
     # Overrides the image CMD (/opt/start.sh). ENTRYPOINT stays `tini --`, so signal
     # handling is kept; sshd is started explicitly because start.sh is bypassed. The SSH
     # key is already baked into the image's /root/.ssh/authorized_keys, so it still works.
-    inner = ("cd /opt/ComfyUI && /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config & "
+    #
+    # normalize-models.sh MUST run here: start.sh is what normally invokes it, and without
+    # it Singularity keeps the "model.diffusion_model." prefix, which makes HybridLoader
+    # refuse to merge ("the two checkpoints have different key sets"). It is idempotent and
+    # costs milliseconds.
+    # NOTE the grouping: "cd X && sshd &" would background the cd as well, leaving the
+    # exec'd python in the wrong cwd. A plain "cd X;" keeps it in this shell; the & then
+    # applies to sshd alone.
+    inner = ("cd /opt/ComfyUI; /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config & "
+             "bash /opt/normalize-models.sh; "
              "exec /opt/comfyui-venv/bin/python3 main.py --listen 0.0.0.0 --port 8188 "
              "--preview-method auto --enable-compress-response-body "
              "--disable-all-custom-nodes --whitelist-custom-nodes "
