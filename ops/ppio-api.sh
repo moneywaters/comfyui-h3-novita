@@ -139,7 +139,7 @@ for i in rows:
     cl=$(api "$B/clusters"); warn_key "$cl"
     [ -z "$cl" ] && { echo "clusters request failed"; exit 1; }
 
-    tmp=$(mktemp); names=$(mktemp); trap 'rm -f "$tmp" "$names"' EXIT
+    names=$(mktemp); dir=$(mktemp -d); trap 'rm -f "$names"; rm -rf "$dir"' EXIT
 
     # clusters that list this GPU, with display names
     echo "$cl" | fmt "
@@ -150,15 +150,21 @@ for c in d.get('data', []):
 
     if [ ! -s "$names" ]; then echo "no cluster lists a $WANT"; exit 1; fi
 
-    # check each of them for live capacity, in parallel
-    cut -f1 "$names" | xargs -P 8 -I{} sh -c \
-      'curl -s --retry 2 --retry-all-errors --max-time 45 \
-         -H "Authorization: Bearer '"$API_KEY"'" \
-         "'"$B"'/products?gpuNum=1&clusterId={}" | sed "s|^|{}|"' >> "$tmp" 2>/dev/null
+    # check each of them for live capacity, 8 at a time. One file per cluster: appending
+    # concurrent curl outputs to a single file interleaves them mid-record and silently
+    # drops clusters. Plain background jobs avoid xargs' nested quoting.
+    cid=; nm=; n=0
+    while IFS=$'\t' read -r cid nm; do
+      [ -z "$cid" ] && continue
+      api "$B/products?gpuNum=1&clusterId=$cid" > "$dir/$cid" 2>/dev/null &
+      n=$((n + 1))
+      [ $((n % 8)) -eq 0 ] && wait
+    done < "$names"
+    wait
 
-    items=$(python3 - "$tmp" "$names" "$WANT" <<'PY'
-import json, sys
-raw, named, want = sys.argv[1], sys.argv[2], sys.argv[3]
+    items=$(python3 - "$dir" "$names" "$WANT" <<'PY'
+import json, os, sys
+rdir, named, want = sys.argv[1], sys.argv[2], sys.argv[3]
 
 names = {}
 for line in open(named, encoding="utf-8"):
@@ -167,10 +173,9 @@ for line in open(named, encoding="utf-8"):
         names[cid] = nm
 
 live = {}
-for line in open(raw, encoding="utf-8", errors="replace"):
-    cid, _, payload = line.partition("|")
+for cid in names:
     try:
-        d = json.loads(payload)
+        d = json.load(open(os.path.join(rdir, cid), encoding="utf-8", errors="replace"))
     except Exception:
         continue
     ids = [p["id"] for p in (d.get("data") or [])

@@ -4,6 +4,9 @@
 Reads a JSON array of {"id", "cols": [...]} on argv[1] (or stdin), draws a selectable
 menu, and prints the chosen `id` on stdout.
 
+Shared by ppio.sh and novita-comfy.sh; set PICK_TITLE to change the prompt line
+(default "PPIO - which location?").
+
 Two things this has to get right:
 
 * **The UI cannot be drawn on stdout.** The caller captures the result with `$(...)`,
@@ -37,6 +40,10 @@ def display_width(s):
 
 def pad(s, width):
     return s + " " * max(0, width - display_width(s))
+
+
+def prompt_title():
+    return os.environ.get("PICK_TITLE") or "PPIO - which location?"
 
 
 def open_tty(mode):
@@ -77,7 +84,7 @@ def choose(items):
     sys.stdout = tty                                  # menu to the terminal...
     try:
         answer = questionary.select(
-            "PPIO — which location?",
+            prompt_title(),
             choices=[questionary.Choice(title=title, value=rid) for rid, title in rows],
             qmark="",
             pointer="▸",
@@ -95,7 +102,7 @@ def choose_plain(items):
     """No terminal: menu to stderr, number from stdin."""
     rows = format_rows(items)
     e = sys.stderr
-    e.write("PPIO — which location?\n")
+    e.write(prompt_title() + "\n")
     for i, (_, title) in enumerate(rows):
         e.write(f"  {i+1:>2}. {title}\n")
     e.flush()

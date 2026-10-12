@@ -730,6 +730,34 @@ Worth noting the whitelist compounds with this: with packs disabled `/object_inf
 3,190,770 bytes instead of 3,554,279 before compression, and 389 KB after.
 
 
+
+### novita-comfy.sh: dynamic image + warm-location picker
+
+`ops/novita-comfy.sh` now follows the `ppio.sh` pattern. Bare invocation opens a TUI
+listing the locations that have **both** a deployable 4090 right now **and** a `Succeeded`
+prewarm for the image it is about to run; picking one launches there.
+
+The image is no longer hardcoded. It is read back from `/image/prewarm` (newest successful
+prewarm for `comfyui-h3-novita`), so the script cannot drift behind the prewarms the way
+`:sha-289174e82568` did — that stale tag meant a cold 83 GB pull even though the cluster
+was warm. `NOVITA_IMAGE` still pins one by hand.
+
+Commands are now `menu` (default), `launch`, `clusters`, `products`, `prewarm-list`,
+`prewarm`, `instances`, `deploy-wait`, `create`, `status [id]`, `url`, `ssh`,
+`stop`, `delete <id>`. The old `start` behaviour is kept as an alias.
+
+**Two bugs fixed along the way, both of which silently emptied the location list:**
+
+1. `live_capacity` ran 14 concurrent `curl`es through `xargs -I{} sh -c ... >> "$tmp"`.
+   Appends are not atomic, so records interleaved mid-JSON (one merged line came out
+   30 KB long) and most clusters were dropped. Now each cluster writes its own file and
+   the reader walks the directory. The same bug was in `ppio-api.sh`; fixed there too.
+2. `ppio-api.sh`'s menu reader called `os.path.join` without importing `os`, so every
+   cluster raised `NameError` straight into `except Exception: continue` — the menu could
+   never list anything. Also fixed.
+
+`ppio_pick.py` gained a `PICK_TITLE` env var so both launchers share one picker.
+
 ### SeedVR2 bulk upscale workflow (handoff/SEEDVR2_BULK_HANDOFF.md)
 
 Shipped `Naxci1-SeedVR2.5-Auto-Manuel-BULK.json` (28 nodes / 33 links) plus everything it
