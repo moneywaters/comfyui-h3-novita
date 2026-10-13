@@ -19,6 +19,7 @@
 #   ./ppio-api.sh prewarm-list                  prewarm tasks + quota
 #   ./ppio-api.sh prewarm [image] [cluster] [pids]
 #   ./ppio-api.sh prewarm-wait <taskId>
+#   ./ppio-api.sh prewarm-delete <id> [id...]   cancel prewarm task(s)
 #   ./ppio-api.sh instances
 #   ./ppio-api.sh deploy-wait [cluster] [4090]  poll for capacity, then create
 #   ./ppio-api.sh create <cluster> <productId> [rootfs] [name]
@@ -36,7 +37,7 @@ SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
 API_KEY="${PPIO_API_KEY:-sk_YPyomQB6CJYriRsMrA_rZtAxiuaIAdsgiH8piQQmaqc}"
 B="${PPIO_API_BASE:-https://api.ppio.com/gpu-instance/openapi/v1}"
-IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-cdb9137a0634}"
+IMAGE="${IMAGE:-docker.io/moneywaters/comfyui-h3-novita:sha-5ec04390d8cb}"
 CLUSTER="${PPIO_CLUSTER:-us-ca-6}"
 WANT="${PPIO_WANT:-4090}"
 BILLING="${PPIO_BILLING:-onDemand}"
@@ -102,11 +103,13 @@ for t in d.get('data', []):
 
   prewarm)
     img="${2:-$IMAGE}"; cluster="${3:-$CLUSTER}"; pids="${4:-$SPOT_4090}"
-    body=$(python3 -c "
-import json
-print(json.dumps({'imageUrl':'$img','repositoryAuth':'','clusterId':'$cluster',
-                  'productIds':[x for x in '$pids'.split(',') if x],'note':'comfyui-h3-novita'}))")
     echo "prewarm image=$img cluster=$cluster"
+    body=$(IMG="$img" CLUSTER_ID="$cluster" PIDS="$pids" python3 -c "
+import json, os
+img = os.environ['IMG']
+note = img.rsplit('/', 1)[-1].split(':')[0]          # repo name, so A/B are labelled correctly
+print(json.dumps({'imageUrl': img, 'repositoryAuth': '', 'clusterId': os.environ['CLUSTER_ID'],
+                  'productIds':[x for x in os.environ['PIDS'].split(',') if x], 'note': note}))")
     out=$(api -X POST -d "$body" "$B/image/prewarm"); warn_key "$out"; echo "$out"; echo
     ;;
 
@@ -121,6 +124,15 @@ print((ts[0].get('state') or ts[0].get('status')) if ts else 'unknown')" 2>/dev/
       n=$((n+1)); sleep 20
     done
     echo timeout; exit 1
+    ;;
+
+  prewarm-delete)
+    [ $# -ge 2 ] || { echo "usage: $SELF prewarm-delete <id> [id...]" >&2; exit 2; }
+    # one prewarm task per slot, and quota is a hard cap, so freeing a slot means
+    # cancelling a task by id here. Body is {"ids":[...]} (PPIO: GPUPlatform_DeleteDockerImagePrewarm2).
+    ids=$(python3 -c "import json,sys;print(json.dumps({'ids':sys.argv[1:]}))" "${@:2}")
+    echo "prewarm-delete: ${*:2}"
+    out=$(api -X POST -d "$ids" "$B/image/prewarm/delete"); warn_key "$out"; echo "$out"; echo
     ;;
 
   instances)

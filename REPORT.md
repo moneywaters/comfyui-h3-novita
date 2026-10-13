@@ -761,6 +761,60 @@ Commands are now `menu` (default), `launch`, `clusters`, `products`, `prewarm-li
 
 
 
+
+### Upload speed: it is the local VPN tunnel, not the image
+
+Reported as "ridiculous upload speed, surely some kind of error". Measured, and it is not a
+bug in the image, in ComfyUI, or on the GPU host.
+
+**Isolating the server.** I launched an `L40S` on PPIO with a *tiny* `python:3.12-slim`
+container whose only job is to answer `ok` in about a millisecond -- no ComfyUI, no 83 GB
+pull. Against that trivial server:
+
+* TTFB was **1.3-2.0 s** for a handler that does nothing. So the latency is the path, not
+  the application.
+* An 8 MB upload ran at **622 KB/s** -- the same figure ComfyUI produces (0.6-0.85 MB/s).
+  ComfyUI adds nothing measurable.
+
+**Isolating the path.** The *same* 8 MB payload to Cloudflare, repeated:
+
+| run | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| MB/s | 0.08 | 0.91 | 0.08 | 3.07 | 3.02 | 0.08 |
+
+Identical bytes, identical endpoint, **37x swing**. That is loss and stalling, not a
+bandwidth ceiling -- the path can do 3 MB/s, it just usually does not.
+
+**What is in the path.** `route -n get default` -> `utun5`, and every destination resolves
+into `198.18.0.x`, Shadowrocket's fake-IP range:
+
+```
+speed.cloudflare.com      198.18.0.142  via utun5
+api.ppio.com              198.18.0.105  via utun5
+<instance>-8188....ppinfra.com  198.18.0.140  via utun5
+```
+
+Binding to `en0` to escape the tunnel cannot reach the internet at all (every attempt timed
+out at 75 s), so the tunnel is the only egress from this machine.
+
+**Things that do NOT help (measured, so do not ship them):**
+
+* **Parallel uploads.** 4 x 2 MB gave **0.34 MB/s aggregate** versus 0.62 MB/s for a single
+  stream -- concurrency made it worse, which fits tunnel saturation rather than a
+  per-stream cap. The `bulk_io` uploader stays sequential on purpose.
+* **Server-side tuning.** The server receives exactly what the tunnel delivers; the timing
+  middleware's handler duration matches the client's own measurement to within 20%.
+* **Compression.** Video is already compressed.
+
+**The fix** is to stop routing the GPU hosts through the tunnel -- a Direct rule in
+Shadowrocket for `ppinfra.com` and `novita.ai`. I did not apply it: the domain rules live in
+`default.db.rule`, an obfuscated `SDAT=3` blob, and the SQLite `rule.db` next to it stores
+its sections as binary blobs while being held open by the Shadowrocket GUI (pid 1716) with a
+live 32 KB `-wal`. Editing either from outside a running app risks being overwritten or
+corrupting the rule set, so this one belongs in the Shadowrocket UI.
+
+`ops/netprobe.sh` reproduces the whole measurement against any instance URL.
+
 ### First measured GUI load (the answer to "why is it slow")
 
 `/debug/timing` on a live instance, after a full page load of the whitelist build
