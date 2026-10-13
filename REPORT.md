@@ -758,6 +758,33 @@ Commands are now `menu` (default), `launch`, `clusters`, `products`, `prewarm-li
 
 `ppio_pick.py` gained a `PICK_TITLE` env var so both launchers share one picker.
 
+
+### Request timing: measuring the slow GUI load instead of guessing
+
+The earlier caching/compression round shipped fixes with no way to measure them, so "the
+GUI is still slow" had no data behind it. `build/patch-timing.sh` adds
+`middleware/timing_middleware.py` plus three edits to `server.py`: an import, a slot for
+`request_timing` at the head of the middleware chain, and `GET /debug/timing`.
+
+It logs every request slower than `COMFY_TIMING_SLOW_MS` (250ms) with duration, bytes and
+path; keeps per-class and per-path totals; and returns the summary as JSON. So after a page
+load:
+
+    curl -s <gui-url>/debug/timing | python3 -m json.tool
+
+which splits the load into websocket / object_info / js / css / json / asset / other with
+request counts, total and average ms, and the 25 slowest paths. The middleware swallows its
+own exceptions so it can never take the server down. `verify-env.sh` asserts the file, the
+registration and the route (23 checks now).
+
+**Note on what is NOT yet baked in.** `--disable-all-custom-nodes --whitelist-custom-nodes`
+exists only as a create-time `command` override in `ppio-api.sh`; a plain launch still loads
+all 22 packs and ~319 extension scripts. Seven of those packs are not referenced by either
+shipped workflow (`ComfyUI-Manager`, `ComfyUI-Impact-Pack`, `comfyui_controlnet_aux`,
+`cg-use-everywhere`, `ComfyUI-Custom-Scripts`, `rgthree-comfy`,
+`ComfyUI-Frame-Interpolation`, `ComfyUI-MiniMax-H3-W4A4-VSA`), and each ships frontend
+scripts that the browser must fetch.
+
 ### SeedVR2 bulk upscale workflow (handoff/SEEDVR2_BULK_HANDOFF.md)
 
 Shipped `Naxci1-SeedVR2.5-Auto-Manuel-BULK.json` (28 nodes / 33 links) plus everything it

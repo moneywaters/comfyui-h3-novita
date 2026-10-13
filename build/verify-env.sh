@@ -171,6 +171,25 @@ else
     echo "  OK  comfyui-dream-video-batches absent"
 fi
 
+
+echo "=== request timing ==="
+# Without this we are back to guessing which phase of a slow page load is at fault.
+if [ -f /opt/ComfyUI/middleware/timing_middleware.py ]; then
+    echo "  OK  timing_middleware.py present"
+else
+    echo "  BAD timing middleware missing (no way to diagnose a slow load)"; FAIL=$((FAIL+1))
+fi
+if grep -q 'request_timing, cache_control' /opt/ComfyUI/server.py 2>/dev/null; then
+    echo "  OK  request_timing registered first in the middleware chain"
+else
+    echo "  BAD request_timing not registered in server.py"; FAIL=$((FAIL+1))
+fi
+if grep -q '"/debug/timing"' /opt/ComfyUI/server.py 2>/dev/null; then
+    echo "  OK  /debug/timing route present"
+else
+    echo "  BAD /debug/timing route missing"; FAIL=$((FAIL+1))
+fi
+
 echo "=== sshd ==="
 test -x /usr/sbin/sshd && echo "  OK sshd present" || { echo "  BAD sshd missing"; FAIL=$((FAIL+1)); }
 
