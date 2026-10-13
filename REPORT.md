@@ -759,6 +759,45 @@ Commands are now `menu` (default), `launch`, `clusters`, `products`, `prewarm-li
 `ppio_pick.py` gained a `PICK_TITLE` env var so both launchers share one picker.
 
 
+
+### bulk_io: the upload/download status was invisible (root cause)
+
+Symptom: the file picker opens, you choose files, and the upload bar never changes.
+
+Cause, measured in the live page on `sha-cdb9137a0634`: the status line was a normal text
+widget with `disabled = true`. The current frontend (frontend 1.53.6, Vue node renderer)
+draws a disabled text widget as an **empty greyed field**, and assigning `widget.value` from
+JS does not repaint it either. Setting `status.value = "PROBE-VISIBLE-VALUE"` put the string
+in the model and **nowhere in the DOM** (`innerTextHasProbe: false`,
+`anyInputHasProbe: false`). A screenshot of the node shows the field rendered blank.
+
+So uploads were frequently succeeding while showing nothing at all. Verified end to end:
+firing the real change event with a File produced `uploaded 1/1 to input/videos`, and
+`POST /api/upload/image` returns 200 from curl and from the page.
+
+Fixes in `build/bulk_io/web/bulk_io.js`:
+
+* status is now an `addDOMWidget` div we own; `textContent` updates are immediate
+  (verified: `initialVisible: true`, `updatedVisible: true`, and visible in a screenshot)
+* uploads use `XMLHttpRequest` instead of `fetch`, because only XHR exposes
+  `upload.onprogress` -- so the line shows `uploading 42% 18.2/43.5 MB` live and then
+  `0.12 MB/s · ~6s left` (verified: 4 progress ticks at 4/55/69/100%)
+* failures are no longer swallowed: HTTP status and response body are shown, and an empty
+  selection says so instead of returning silently
+* `input.value` is reset on every path, so re-picking the same file always fires `change`
+* the hidden `<input>` is created once per node and removed in `onRemoved`; it used to be
+  appended on every `onNodeCreated` and never cleaned up (six were live after a few loads)
+
+**Why uploads feel slow: the link, not the code.** Measured against this instance,
+`POST /upload/image` runs at ~0.1-0.56 MB/s (1 MB in 10.4s; 4 MB in 7.4s; a 120 MB body
+stalled at 32 MB after 240s). A 500 MB video is therefore 15+ minutes per file. The progress
+line now makes that visible instead of looking hung.
+
+**Same measurement explains the slow first GUI load:** TTFB is ~1.2s (connect is only 25ms)
+and the page pulls ~700 module requests, so a cold load is ~700 x 1.2s spread over the
+browser's connection limit. The cache patch only helps loads 2+; the whitelist
+(`PPIO_LIMIT_NODES=1`) cuts the request count and has not yet been used on any instance.
+
 ### Request timing: measuring the slow GUI load instead of guessing
 
 The earlier caching/compression round shipped fixes with no way to measure them, so "the

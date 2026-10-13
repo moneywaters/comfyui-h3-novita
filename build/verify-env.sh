@@ -190,6 +190,31 @@ else
     echo "  BAD /debug/timing route missing"; FAIL=$((FAIL+1))
 fi
 
+
+echo "=== bulk_io status visibility ==="
+BJ=/opt/ComfyUI/custom_nodes/bulk_io/web/bulk_io.js
+if [ -f "$BJ" ]; then
+    # a plain text widget with disabled=true renders EMPTY in the current frontend, so the
+    # status must be a DOM widget; without this the upload looks like it does nothing
+    if grep -q 'addDOMWidget' "$BJ"; then
+        echo "  OK  bulk_io status is visible (DOM widget)"
+    else
+        echo "  BAD bulk_io status not a DOM widget (uploads will appear to do nothing)"; FAIL=$((FAIL+1))
+    fi
+    if grep -q 'xhr.upload.onprogress' "$BJ"; then
+        echo "  OK  bulk_io reports upload progress"
+    else
+        echo "  BAD no upload progress events"; FAIL=$((FAIL+1))
+    fi
+    if grep -q 'status.disabled' "$BJ"; then
+        echo "  BAD bulk_io still uses a disabled text widget for status"; FAIL=$((FAIL+1))
+    else
+        echo "  OK  no disabled status widget"
+    fi
+else
+    echo "  BAD bulk_io web extension missing"; FAIL=$((FAIL+1))
+fi
+
 echo "=== sshd ==="
 test -x /usr/sbin/sshd && echo "  OK sshd present" || { echo "  BAD sshd missing"; FAIL=$((FAIL+1)); }
 
