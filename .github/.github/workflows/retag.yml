@@ -1,0 +1,56 @@
+name: Mint content tags
+
+# Publish a content-derived tag (sha-<first12 of manifest digest>) for each image,
+# so prewarm/deploy can reference an immutable tag.
+#
+# Why this runs here and not locally: Docker Hub is unreachable from the dev Mac
+# (its DNS is hijacked to unrelated IPs and auth.docker.io/DoH are both blocked),
+# so registry work is done on a GitHub-hosted runner, which has clean egress.
+#
+# `build.yml` already mints these as part of compose; this workflow exists to mint
+# them for images that were published before that change.
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: "source tag to copy"
+        default: "latest"
+        required: true
+      to:
+        description: "target tag, or 'auto' for sha-<digest12>"
+        default: "auto"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [comfyui-h3-novita, comfyui-qwen-novita]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASS }}" | docker login -u "${{ secrets.DOCKER_USER }}" --password-stdin
+
+      - name: Mint "${{ inputs.to }}" for ${{ matrix.repo }}
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
+        run: |
+          set -euo pipefail
+          python3 ops/retag.py \
+            --repo "${DOCKER_USER}/${{ matrix.repo }}" \
+            --from "${{ inputs.from }}" \
+            --to "${{ inputs.to }}"
+
+      - name: List resulting tags
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+        run: python3 ops/list-tags.py "${DOCKER_USER}/${{ matrix.repo }}"
