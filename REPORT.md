@@ -760,6 +760,39 @@ Commands are now `menu` (default), `launch`, `clusters`, `products`, `prewarm-li
 
 
 
+
+### First measured GUI load (the answer to "why is it slow")
+
+`/debug/timing` on a live instance, after a full page load of the whitelist build
+(`--disable-all-custom-nodes --whitelist-custom-nodes`, 186 extensions):
+
+| class | requests | total ms | avg ms | bytes |
+|---|---|---|---|---|
+| js | 609 | 2,739 | 4.5 | 7.76 MB |
+| json | 291 | 5,334 | 18.3 | 13.0 MB |
+| object_info | 7 | 981 | 140.2 | 6.50 MB |
+| css | 11 | 123 | 11.2 | 0 |
+| asset | 6 | 1.0 | 0.2 | 0 |
+| websocket | 1 | 254,784 | -- | 0 (long-lived `/ws`) |
+
+**~917 requests, and the server spends only ~9.2s total on them.** So the first load is
+not slow because the server is slow -- it is slow because 917 requests each pay a
+round-trip through the host proxy. The earlier TTFB measurement (1.2s) is almost entirely
+network: the handler itself averages 4.5ms for a JS module and 18.3ms for a JSON call.
+
+That is why the cache patch helps so much on loads 2+ (no requests at all) and why the
+whitelist matters for load 1 (320 -> 186 extensions). It also means the remaining lever for
+a cold load is request count, not server tuning.
+
+Also visible: the `/ws` entry is one long-lived socket held for the whole session (254s),
+so it must be read as a constant, not as a slow request. And `/api/object_info` is 3.25 MB
+per call as measured by the middleware, which sits *before* `compress_body` in the chain --
+so that figure is the uncompressed size, not what the browser transfers.
+
+Download button verified too: it reports `no upscaled_batch.zip yet (HTTP 404) — run the
+workflow first — the zip is rebuilt after each run`, on screen, rather than failing
+silently.
+
 ### bulk_io: the upload/download status was invisible (root cause)
 
 Symptom: the file picker opens, you choose files, and the upload bar never changes.
