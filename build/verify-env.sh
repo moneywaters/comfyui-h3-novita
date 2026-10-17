@@ -42,33 +42,45 @@ for f in /opt/ComfyUI/user/default/workflows/*.json; do echo "    $(basename "$f
 
 
 echo "=== workflow model references ==="
-WF=/opt/ComfyUI/user/default/workflows/Minimax_Seed_Hunter_v2.5.1.json
-if [ ! -f "$WF" ]; then
-    echo "  BAD v2.5.1 workflow missing"; FAIL=$((FAIL+1))
-else
-    # Image A ships fl2va + Singularity; the Comfy-Org ref2va lives in image B, so a
-    # loader pointing at it cannot run here. This regressed once when a stray file copy
-    # overwrote the fix, so assert it.
-    #
-    # Check LOADER VALUES only, via the parser: the workflow also carries a markdown
-    # note that links to the ref2va model, and a plain grep for the name matches that
-    # text and reports a false failure (it did exactly that on the first run).
-    python3 - "$WF" <<'PY' || FAIL=$((FAIL+1))
+# Image A ships fl2va + Singularity + nvfp4 TE; the Comfy-Org ref2va and the int8 TE
+# live in image B / upstream, so a loader pointing at them cannot run here. This
+# regressed once when a stray file copy overwrote the fix, so assert it per workflow.
+#
+# Check LOADER VALUES only, via the parser: workflows also carry markdown notes that
+# link to upstream models, and a plain grep for the name matches that text and
+# reports a false failure (it did exactly that on the first run).
+for WF in Minimax_Seed_Hunter_v2.5.1.json H3_CharSheet_6Panel.json H3_Cinematic_Multishot.json; do
+WF_PATH="/opt/ComfyUI/user/default/workflows/$WF"
+if [ ! -f "$WF_PATH" ]; then
+    echo "  BAD $WF missing"; FAIL=$((FAIL+1))
+    continue
+fi
+python3 - "$WF_PATH" "$WF" <<'PY' || FAIL=$((FAIL+1))
 import json, sys
 
-BAD = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
-WANT = ["minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-        "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors"]
-FIELDS = ("unet_name", "vae_name", "clip_name", "lora_name", "tiny_vae")
+path, name = sys.argv[1], sys.argv[2]
+BAD = {"minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+       "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+       "minimax_h3_hybrid_fl2va_ref2va_b30-49-int8.safetensors",
+       "minimax_h3_turbo_v4_step600_ema.safetensors"}
+WANT = {"minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+        "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"}
+FIELDS = ("unet_name", "vae_name", "clip_name", "lora_name", "tiny_vae",
+          "base_model", "overlay_model")
 
-wf = json.load(open(sys.argv[1]))
+wf = json.load(open(path))
 vals, seen = [], set()
 
-def walk(o):
+def walk(o, active=True):
     if isinstance(o, dict):
         if id(o) in seen:
             return
         seen.add(id(o))
+        # muted/bypassed nodes (and nodes inside the bypassed speedup subgraph
+        # instance) never execute, so their refs are inert
+        if o.get("mode") == 4:
+            return
         named = o.get("widgets_values_named") or {}
         for f in FIELDS:
             v = named.get(f)
@@ -84,18 +96,18 @@ def walk(o):
             walk(x)
 
 walk(wf)
-bad = sorted({v for v in vals if v == BAD})
-missing = [m for m in WANT if m not in vals]
+bad = sorted({v for v in vals if v in BAD})
+missing = sorted(m for m in WANT if m not in vals)
 
 if bad:
-    print("  BAD loader points at ref2va_org (image B's model): %s" % bad)
+    print("  BAD %s loads non-image model: %s" % (name, bad))
 if missing:
-    print("  BAD workflow does not load: %s" % missing)
+    print("  BAD %s does not load: %s" % (name, missing))
 if not bad and not missing:
-    print("  OK  loaders use fl2va + Singularity (%d loader values checked)" % len(set(vals)))
+    print("  OK  %s loaders resolve in-image (%d values)" % (name, len(set(vals))))
 sys.exit(1 if (bad or missing) else 0)
 PY
-fi
+done
 
 echo "=== JS/CSS cacheable ==="
 CM=$(ls /opt/ComfyUI/middleware/cache_middleware.py 2>/dev/null | head -1)
