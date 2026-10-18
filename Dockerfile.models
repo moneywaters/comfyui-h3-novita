@@ -32,4 +32,4 @@ RUN chmod +x /opt/models-part.sh /opt/chunk-model.sh
 
 RUN --mount=type=secret,id=hf_token,required=false \
     export HF_TOKEN="${HF_TOKEN:-$(cat /run/secrets/hf_token 2>/dev/null || true)}" \
-    && PART="${PART}" WITH_PE="${WITH_PE}" bash /opt/models-part.sh
+    && CHUNK_MODELS=1 PART="${PART}" WITH_PE="${WITH_PE}" bash /opt/models-part.sh

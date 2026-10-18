@@ -265,6 +265,35 @@ if [ "$CHUNKS" -gt 0 ]; then
     fi
 fi
 
+
+echo "=== platform-aware weight sourcing ==="
+# The image carries weights for PPIO/Novita, which prewarm it. SimplePod cannot unpack the
+# big layers at all, so there it must fetch from Hugging Face instead. All four scripts
+# below have to be present for that to work end to end.
+for f in /opt/models-source.sh /opt/fetch-models-boot.sh /opt/models-part.sh /opt/chunk-model.sh; do
+    if [ -x "$f" ]; then
+        echo "  OK  $(basename "$f")"
+    else
+        echo "  BAD $f missing/not executable (weight sourcing broken)"; FAIL=$((FAIL+1))
+    fi
+done
+# start.sh must consult the decision before it tries to stitch or normalise
+if grep -q 'fetch-models-boot.sh' /opt/start.sh 2>/dev/null; then
+    echo "  OK  start.sh provisions weights for the platform"
+else
+    echo "  BAD start.sh never calls fetch-models-boot.sh"; FAIL=$((FAIL+1))
+fi
+# chunking must be OFF by default so the runtime download path writes whole files
+if grep -q 'CHUNK_MODELS:-0' /opt/models-part.sh 2>/dev/null; then
+    echo "  OK  chunking gated to build time (CHUNK_MODELS defaults 0)"
+else
+    echo "  BAD models-part.sh would chunk runtime downloads (models would vanish)"; FAIL=$((FAIL+1))
+fi
+# and the resolved decision, so a boot log shows which way this image went
+if [ -x /opt/models-source.sh ]; then
+    printf '  resolved weights source: %s\n' "$(/opt/models-source.sh 2>/dev/null | tail -1)"
+fi
+
 echo "=== sshd ==="
 test -x /usr/sbin/sshd && echo "  OK sshd present" || { echo "  BAD sshd missing"; FAIL=$((FAIL+1)); }
 

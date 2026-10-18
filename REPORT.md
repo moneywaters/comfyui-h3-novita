@@ -764,6 +764,55 @@ Commands are now `menu` (default), `launch`, `clusters`, `products`, `prewarm-li
 
 
 
+
+### Platform-aware weights: baked on PPIO/Novita, downloaded on SimplePod
+
+SimplePod will not unpack this image's ~21 GB layers, so the baked weights are unreachable
+there. Rather than maintain two images, the image now decides at boot where its weights
+come from — `build/models-source.sh` — and only SimplePod takes the slow path.
+
+**How the platform is decided, explicit first:**
+
+1. `BULK_MODELS_SOURCE=baked|download` — wins outright. SimplePod templates and instances
+   both accept `envVariables`, so the launcher can simply say so. Never guess when you can
+   be told.
+2. `SIMPLEPOD=1` (or `SIMPLEPOD_INSTANCE*`) — set by the SimplePod launcher's start script.
+3. Filesystem sniffing, for a hand-made template: `/app/data`, `/workspace`,
+   `/usr/local/bin/entrypoint.sh`, `/opt/simplepod-login`. Every match is logged with its
+   reason so a false positive is diagnosable rather than mysterious.
+4. Otherwise **baked**, because PPIO and Novita prewarm this image and a fast boot is the
+   whole point.
+
+The answer goes to stdout, the reasoning to stderr, and the decision is cached in
+`/run/models-source`. Exit code is `0` for baked, `10` for download, so callers can branch.
+
+Verified decision matrix: explicit download → download; explicit baked beats `SIMPLEPOD=1`
+→ baked; `SIMPLEPOD=1` → download; nothing set → baked; `banana` → warns and falls back to
+baked; `DOWNLOAD` → download (case-insensitive).
+
+**The download path reuses `models-part.sh`,** which already is the Hugging Face fetcher
+used at image-build time (per-file curl, 6 retries, a minimum-size check, `.partial`
+staging). Reusing it means the boot and build paths cannot drift. It fetches a curated part
+set by default — `h3-fl2va h3-singularity h3enc h3vae-kijai h3vae-audio h3loras h3extra
+seedvr2`, i.e. what the shipped workflows actually need — so a SimplePod user is not billed
+for waiting on Qwen weights for an H3 run. `MODELS_PARTS` overrides it.
+
+Guards, all verified: no `HF_TOKEN` refuses with the exact `envVariables` snippet to add; a
+space check against the nearest existing ancestor of the models dir refuses *before* a
+20 GB write; a failed part is logged and ComfyUI still starts.
+
+**One subtle bug this surfaced.** `models-part.sh` chunked unconditionally, so a boot
+download would have split the files it had just fetched — and since the download path has no
+stitch step, every model would have been invisible to ComfyUI. Chunking is now gated behind
+`CHUNK_MODELS=1`, which only `Dockerfile.models` sets, so the gate defaults to the safe
+answer for runtime callers.
+
+**Also found:** `models-part.sh` and `chunk-model.sh` lived only in the models image, but the
+runtime download calls them, so both are now COPYed into the env image too.
+
+**Platform compatibility:** unchanged for PPIO and Novita — with no SimplePod signal the
+script resolves `baked` and returns immediately, so their prewarmed boots pay nothing.
+
 ### The SimplePod blocker, and the chunked-weight fix
 
 **What was proven.** Our 83.1 GB image will not unpack on SimplePod. Their console loops

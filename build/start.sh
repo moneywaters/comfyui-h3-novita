@@ -59,8 +59,20 @@ mkdir -p /var/log
 # the ones SimplePod could not unpack and the ones a user reaches for first. Everything
 # else stays lazy so PPIO and Novita, which pull this image happily, pay nothing extra.
 # Set MODELS_REASSEMBLE_ALL=1 to stitch every chunked model at boot instead.
+# Where do the weights come from? On PPIO and Novita the image holds them and this is a
+# no-op. On SimplePod the baked weights cannot be unpacked at all (their hosts loop on a
+# ~21 GB layer forever), so this fetches them from Hugging Face instead. The decision and
+# its reason are logged by models-source.sh.
+if [ -x /opt/fetch-models-boot.sh ]; then
+    bash /opt/fetch-models-boot.sh 2>&1 | sed 's/^/[models] /' || \
+        log "WARN: model provisioning reported a problem (continuing to start ComfyUI)"
+fi
+
+# Only meaningful when the weights came from the image: stitching rebuilds the chunk files
+# that were baked in. On the download path models-part.sh writes whole files, so there is
+# nothing to stitch and this exits immediately.
 if [ -x /opt/stitch-models.sh ]; then
-    log "assembling chunked model weights"
+    log "assembling chunked model weights (image-supplied only)"
     bash /opt/stitch-models.sh 2>&1 | sed 's/^/[stitch] /' || log "WARN: stitch-models failed"
 fi
 
