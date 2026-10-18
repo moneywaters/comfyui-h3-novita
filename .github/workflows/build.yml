@@ -169,24 +169,18 @@ jobs:
           python3 ops/compose-image.py --repo "${DOCKER_USER}/${IMAGE_A}" \
             --env part-env --parts "$(prefix "$PARTS")" --out models
 
-          # Image B needs the SAME bytes under a different name, because the PPIO and
+          # Image B is the same layers under a different name, because the PPIO and
           # Novita launchers ask for comfyui-qwen-novita when a Qwen run is wanted.
           #
-          # A bare manifest PUT to the second repo is rejected (HTTP 400): the manifest
-          # references blobs that only repo A can see, and Docker Hub does not auto-mount
-          # them across repos. pull + tag + push is the supported path and is cheap --
-          # every layer is already local from the compose step and already on the
-          # registry, so the second push only uploads the manifest.
-          echo "### publishing the same image as ${IMAGE_B}:models"
-          A="docker.io/${DOCKER_USER}/${IMAGE_A}:models"
-          podman pull "$A"
-          ID=$(podman image inspect "$A" --format '{{.Id}}' | sed 's/^sha256://' | cut -c1-12)
-          for TAG in models "sha-${ID}-models" latest "sha-${ID}"; do
-            podman tag "$A" "docker.io/${DOCKER_USER}/${IMAGE_B}:${TAG}"
-            podman push "docker.io/${DOCKER_USER}/${IMAGE_B}:${TAG}"
-          done
-          echo "### PPIO/NOVITA PREWARM: ${IMAGE_A}:models  (sha-${ID}-models)"
-          echo "### the same image is also published as ${IMAGE_B}:models and :latest"
+          # Compose it the SAME way -- from the part images -- rather than pulling the
+          # finished 78 GB image and re-pushing it. A pull needs 78 GB of local disk and
+          # does not fit on the runner (measured: "no space left on device" writing
+          # fl2va). compose-image.py only writes manifests and references blobs that are
+          # already in the registry, so it costs a few KB.
+          echo "### composing ${IMAGE_B}:models from the same part images"
+          python3 ops/compose-image.py --repo "${DOCKER_USER}/${IMAGE_B}" \
+            --parts-repo "${DOCKER_USER}/${IMAGE_A}" \
+            --env part-env --parts "$(prefix "$PARTS")" --out models
 
       - name: Report the content tags
         env:
