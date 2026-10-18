@@ -169,15 +169,24 @@ jobs:
           python3 ops/compose-image.py --repo "${DOCKER_USER}/${IMAGE_A}" \
             --env part-env --parts "$(prefix "$PARTS")" --out models
 
-          # Image B is byte-identical; only the NAME differs, because the PPIO and Novita
-          # launchers ask for comfyui-qwen-novita when a Qwen run is wanted. Publish the
-          # same manifest under the second repo by copying it at the registry -- cheaper
-          # and exact, versus re-pushing 83 GB.
-          echo "### publishing the same manifest as ${IMAGE_B}:models"
-          python3 ops/copy-tag.py \
-            --from-repo "${DOCKER_USER}/${IMAGE_A}" --from-tag models \
-            --to-repo   "${DOCKER_USER}/${IMAGE_B}" --to-tag   models \
-            --to-tag-also latest
+          # Image B needs the SAME bytes under a different name, because the PPIO and
+          # Novita launchers ask for comfyui-qwen-novita when a Qwen run is wanted.
+          #
+          # A bare manifest PUT to the second repo is rejected (HTTP 400): the manifest
+          # references blobs that only repo A can see, and Docker Hub does not auto-mount
+          # them across repos. pull + tag + push is the supported path and is cheap --
+          # every layer is already local from the compose step and already on the
+          # registry, so the second push only uploads the manifest.
+          echo "### publishing the same image as ${IMAGE_B}:models"
+          A="docker.io/${DOCKER_USER}/${IMAGE_A}:models"
+          podman pull "$A"
+          ID=$(podman image inspect "$A" --format '{{.Id}}' | sed 's/^sha256://' | cut -c1-12)
+          for TAG in models "sha-${ID}-models" latest "sha-${ID}"; do
+            podman tag "$A" "docker.io/${DOCKER_USER}/${IMAGE_B}:${TAG}"
+            podman push "docker.io/${DOCKER_USER}/${IMAGE_B}:${TAG}"
+          done
+          echo "### PPIO/NOVITA PREWARM: ${IMAGE_A}:models  (sha-${ID}-models)"
+          echo "### the same image is also published as ${IMAGE_B}:models and :latest"
 
       - name: Report the content tags
         env:
