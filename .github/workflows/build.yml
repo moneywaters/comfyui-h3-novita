@@ -1,22 +1,27 @@
-name: Build & push Novita images (split build)
+name: Build & push ComfyUI images
 
-# A GitHub-hosted runner has ~43 GB free, so each image is built in independent
-# parts (each <= ~25 GB), pushed to Docker Hub, then stitched back into one image
-# at the registry by ops/compose-image.py.
+# The images contain CODE ONLY -- no model weights. Weights are downloaded from Hugging
+# Face on first boot by build/fetch-models-boot.sh.
 #
-# Produces two images, because Novita caps a prewarm at 100 GB per image:
-#   moneywaters/comfyui-h3-novita     ~86 GB  H3 video generation (Seed Hunter v2.5.1)
-#   moneywaters/comfyui-qwen-novita   ~49 GB  Qwen 2.1 image editing (+ spare H3 variants)
+# Why: our previous ~86 GB images carried ~62 GB of weights as single ~20 GB layers, and
+# SimplePod's hosts would not unpack them -- their console looped "Preparing instance /
+# Pulling image" forever while diskUsage stayed at 0.00, and the container never started.
+# Reproduced on host 216 (RTX 4090) and host 161 (RTX 3090) at both 100 GB and 200 GB disk,
+# while a 7 GB control image booted on those same hosts in ~300 seconds.
 #
-# Required repository secrets: DOCKER_USER, DOCKER_PASS, HF_TOKEN
+# A code-only image pulls in a couple of minutes anywhere. The cost is that a fresh instance
+# downloads weights once before its first generation; a container restart finds them on disk
+# and does nothing.
+#
+# Two image names are published because the PPIO and Novita launchers ask for different
+# ones. Both point at identical layers.
+#
+# Required repository secrets: DOCKER_USER, DOCKER_PASS
+# HF_TOKEN is NOT needed by this workflow -- only at runtime, by the instance.
 
 on:
   workflow_dispatch:
     inputs:
-      parts:
-        description: "JSON array of parts to build"
-        default: '["env","h3-fl2va","h3-singularity","h3enc","h3vae-kijai","h3vae-fp16","h3vae-audio","h3loras","h3extra","seedvr2","h3-ref2va-org","qwen-diff","qwen-enc","qwen-vae","qwen-loras"]'
-        required: true
       torch_index:
         description: "PyTorch CUDA index"
         default: "cu130"
@@ -28,110 +33,75 @@ permissions:
 env:
   IMAGE_A: comfyui-h3-novita
   IMAGE_B: comfyui-qwen-novita
-  PARTS_A: h3-fl2va,h3-singularity,h3enc,h3vae-kijai,h3vae-fp16,h3vae-audio,h3loras,h3extra,seedvr2
-  PARTS_B: qwen-diff,qwen-enc,qwen-vae,qwen-loras,h3-ref2va-org
 
 jobs:
-  part:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
-    strategy:
-      fail-fast: false
-      matrix:
-        part: ${{ fromJSON(inputs.parts) }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
       - name: Show disk
         run: df -h /
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
-          sudo rm -rf /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache/go || true
-          sudo rm -rf /usr/lib/jvm /usr/local/lib/node_modules /opt/hostedtoolcache/PyPy || true
-          sudo rm -rf /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/node /usr/local/.ghcup || true
-          sudo rm -rf /usr/share/mysql /usr/share/postgresql /opt/hostedtoolcache || true
-          sudo apt-get clean
-          df -h /
-
       - name: Ensure podman
         run: |
-          if ! command -v podman >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y -qq podman; fi
+          if ! command -v podman >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq podman
+          fi
           podman --version
 
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASS }}" | podman login docker.io -u "${{ secrets.DOCKER_USER }}" --password-stdin
 
-      - name: Stage HF token
-        run: |
-          install -m 600 /dev/null /tmp/hf_token
-          printf '%s' "${{ secrets.HF_TOKEN }}" > /tmp/hf_token
-
-      - name: Pick Dockerfile
-        id: pick
-        run: |
-          if [ "${{ matrix.part }}" = "env" ]; then
-            echo "dockerfile=Dockerfile.env" >> "$GITHUB_OUTPUT"
-          else
-            echo "dockerfile=Dockerfile.models" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build part
+      - name: Build the image
         run: |
           set -euo pipefail
-          PART="${{ matrix.part }}"
           IMAGE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}"
           podman build --format docker \
-            --secret id=hf_token,src=/tmp/hf_token \
-            --build-arg PART="${PART}" \
             --build-arg TORCH_INDEX="${{ inputs.torch_index }}" \
             --build-arg SSH_AUTHORIZED_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG6eQLbiJEo7wKVDj+1BswTpRJ2C8BU/hMFxhDYweS0n novita" \
-            -t "${IMAGE}:part-${PART}" \
-            -f "${{ steps.pick.outputs.dockerfile }}" .
-          podman image inspect "${IMAGE}:part-${PART}" --format '{{.Size}} bytes'
+            -t "${IMAGE}:latest" \
+            -f Dockerfile.env .
+          podman image inspect "${IMAGE}:latest" --format 'size {{.Size}} bytes'
           df -h /
 
-      - name: Push part
+      - name: Assert the image carries no model weights
+        # The whole design rests on this property. If a model COPY is ever re-added to
+        # Dockerfile.env, the image silently returns to ~86 GB and SimplePod breaks again,
+        # so fail loudly here rather than hearing about it from a customer.
         run: |
           set -euo pipefail
-          podman push "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:part-${{ matrix.part }}"
+          IMAGE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:latest"
+          BIG=$(podman run --rm --entrypoint sh "$IMAGE" -c \
+            "find /opt/ComfyUI/models -type f \( -name '*.safetensors' -o -name '*.gguf' \) -size +100M 2>/dev/null | head -5" || true)
+          if [ -n "$BIG" ]; then
+            echo "ERROR: image contains model weights; it must be code-only:"
+            echo "$BIG"
+            exit 1
+          fi
+          echo "OK: no model weights baked into the image"
+          podman run --rm --entrypoint sh "$IMAGE" -c \
+            "du -sh /opt/ComfyUI/models 2>/dev/null; ls /opt/ComfyUI/models"
+          podman run --rm --entrypoint sh "$IMAGE" -c \
+            "ls -l /opt/fetch-models-boot.sh /opt/models-source.sh /opt/models-part.sh"
 
-      - name: Cleanup token
-        if: always()
-        run: rm -f /tmp/hf_token
-
-  compose:
-    needs: [part]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Compose both images at the registry
-        env:
-          DOCKER_USER: ${{ secrets.DOCKER_USER }}
-          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
+      - name: Push both image names with a content tag
         run: |
           set -euo pipefail
-          prefix() { local out=""; for p in $(echo "$1" | tr ',' ' '); do out="${out}${out:+,}part-${p}"; done; echo "$out"; }
+          SRC="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:latest"
 
-          echo "### image A: ${IMAGE_A} (H3 video)"
-          python3 ops/compose-image.py --repo "${DOCKER_USER}/${IMAGE_A}" \
-            --env part-env --parts "$(prefix "$PARTS_A")" --out latest
+          # Content tag from the image ID, so a prewarm can never serve stale layers: any
+          # layer change yields a new tag instead of re-pointing an existing one.
+          ID=$(podman image inspect "$SRC" --format '{{.Id}}' | sed 's/^sha256://' | cut -c1-12)
+          echo "content tag -> sha-${ID}"
 
-          echo "### image B: ${IMAGE_B} (Qwen 2.1)"
-          # every part (including this image's own qwen-* parts) is pushed to the
-          # IMAGE_A repo, so B must resolve its parts from there too.
-          python3 ops/compose-image.py --repo "${DOCKER_USER}/${IMAGE_B}" \
-            --parts-repo "${DOCKER_USER}/${IMAGE_A}" \
-            --env part-env --parts "$(prefix "$PARTS_B")" --out latest
+          for REPO in "${{ env.IMAGE_A }}" "${{ env.IMAGE_B }}"; do
+            for TAG in latest "sha-${ID}"; do
+              podman tag "$SRC" "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:${TAG}"
+              podman push "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:${TAG}"
+            done
+            echo "pushed ${REPO}:latest and :sha-${ID}"
+          done
 
-      - name: Verify sizes are under the 100 GB prewarm cap
-        env:
-          DOCKER_USER: ${{ secrets.DOCKER_USER }}
-        run: |
-          set -euo pipefail
-          python3 ops/check-sizes.py \
-            "${DOCKER_USER}/${IMAGE_A}" \
-            "${DOCKER_USER}/${IMAGE_B}"
+          echo "### USE FOR PREWARM: sha-${ID}"

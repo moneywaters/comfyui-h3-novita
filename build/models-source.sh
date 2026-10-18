@@ -36,60 +36,53 @@ log() { echo "[models-source] $*" >&2; }
 explicit="${BULK_MODELS_SOURCE:-}"
 source=""
 
-# --- 1. explicit instruction ------------------------------------------------------
+# --- decide from what is actually on disk -----------------------------------------
+#
+# The image ships NO model weights -- that is deliberate, see the header of
+# fetch-models-boot.sh. So the question is never "which platform is this" but "are the
+# weights already here?". A restart of the same container finds them and does nothing; a
+# fresh instance downloads them.
+#
+# BULK_MODELS_SOURCE is still honoured so the behaviour can be forced:
+#   baked    -> pretend the weights are present, do not download
+#   download -> always verify against Hugging Face
+explicit="${BULK_MODELS_SOURCE:-}"
 explicit_lc=$(printf '%s' "$explicit" | tr '[:upper:]' '[:lower:]')
+
+MODELS_DIR="${COMFYUI_PATH:-/opt/ComfyUI}/models"
+# The two ~20 GB diffusion models are the ones every H3 workflow needs, so they are the
+# honest test of "are the weights here?".
+MARKER="${MODELS_MARKER:-$MODELS_DIR/diffusion_models}"
+present=0
+if [ -d "$MARKER" ]; then
+    n=$(find "$MARKER" -maxdepth 1 -type f -name '*.safetensors' 2>/dev/null | wc -l | tr -d ' ')
+    [ "${n:-0}" -gt 0 ] && present=1
+fi
+
 case "$explicit_lc" in
     baked)
-        reason="BULK_MODELS_SOURCE=baked"
         source=baked
+        reason="BULK_MODELS_SOURCE=baked (forced)"
         ;;
     download|hf|huggingface)
-        reason="BULK_MODELS_SOURCE=$explicit"
         source=download
+        reason="BULK_MODELS_SOURCE=$explicit (forced)"
         ;;
     "")
-        source=""
+        if [ "$present" = "1" ]; then
+            source=baked
+            reason="weights already present in $MARKER"
+        else
+            source=download
+            reason="no weights in $MARKER (image ships none; fetching from Hugging Face)"
+        fi
         ;;
     *)
-        log "WARN: BULK_MODELS_SOURCE='$explicit' is not baked|download; ignoring"
-        source=""
+        log "WARN: BULK_MODELS_SOURCE='$explicit' is not baked|download; deciding from disk"
+        if [ "$present" = "1" ]; then source=baked; reason="weights already present in $MARKER"
+        else source=download; reason="no weights in $MARKER"; fi
         ;;
 esac
-
-# --- 2. SimplePod markers ---------------------------------------------------------
-if [ -z "$source" ]; then
-    for v in SIMPLEPOD IS_SIMPLEPOD SIMPLEPOD_INSTANCE SIMPLEPOD_INSTANCE_ID; do
-        if [ -n "${!v:-}" ]; then
-            source=download
-            reason="env \$$v is set"
-            break
-        fi
-    done
-fi
-
-if [ -z "$source" ]; then
-    # --- 3. sniff the container filesystem ----------------------------------------
-    # Each candidate is a SimplePod-specific artefact. Collected rather than
-    # short-circuited so the log shows everything that matched.
-    hits=()
-    [ -d /app/data ]           && hits+=("/app/data exists (SimplePod volume mount)")
-    [ -d /workspace ]          && hits+=("/workspace exists (SimplePod mount)")
-    [ -x /usr/local/bin/entrypoint.sh ] && grep -qs 'simplepod' /usr/local/bin/entrypoint.sh \
-                               && hits+=("/usr/local/bin/entrypoint.sh mentions simplepod")
-    # their login gate is served by the host proxy, but their own images carry the
-    # helper; check only cheap local paths, never the network
-    [ -f /opt/simplepod-login ] && hits+=("/opt/simplepod-login present")
-    if [ "${#hits[@]}" -gt 0 ]; then
-        source=download
-        reason="filesystem: ${hits[*]}"
-    fi
-fi
-
-# --- 4. default -------------------------------------------------------------------
-if [ -z "$source" ]; then
-    source=baked
-    reason="default (no SimplePod signal; PPIO/Novita prewarm the baked weights)"
-fi
 
 # --- report + persist -------------------------------------------------------------
 log "decision: $source"

@@ -766,6 +766,41 @@ Commands are now `menu` (default), `launch`, `clusters`, `products`, `prewarm-li
 
 
 
+
+### The image is code-only; weights come from Hugging Face at boot
+
+**This is the design now, and it replaces the chunking approach.** Chunking was the wrong
+fix: it kept ~62 GB of weights in the image and only shuffled them into smaller layers.
+
+The image ships **no model weights at all**. `build/fetch-models-boot.sh` runs from
+`start.sh` and downloads them from Hugging Face on a fresh instance; on a container restart
+they are already on disk and it returns immediately.
+
+**What this fixes.** SimplePod's hosts would not unpack our ~20 GB model layers — their
+console looped `Preparing instance / Pulling image` forever while `diskUsage` stayed 0.00
+and the container never started. Reproduced on host 216 (RTX 4090) and host 161 (RTX 3090),
+at 100 GB and 200 GB disk, while a 7 GB control image booted on those same hosts in ~300s.
+A code-only image has no such layers, so it pulls anywhere.
+
+**What it costs.** A fresh instance downloads ~40 GB of weights once before its first
+generation, and needs `HF_TOKEN` set on the instance/template `envVariables`. A restart of
+the same container reuses the on-disk weights and pays nothing. For PPIO and Novita this
+also means the prewarm now caches a ~7 GB image instead of ~86 GB.
+
+**Removed:** `Dockerfile.models`, `build/chunk-model.sh`, `build/stitch-models.sh`,
+`build/stitch-models.py`, `ops/compose-image.py`, `ops/check-sizes.py`, `ops/retag.py`.
+The split-build/compose machinery existed only to assemble huge model layers, so it goes
+with them. `build/models-part.sh` stays — it is the Hugging Face fetcher the boot path calls.
+
+**The workflow is now one job:** build `Dockerfile.env`, assert no model file over 100 MB is
+baked in (failing the build if one is, so the property cannot silently regress), then push
+both image names with a content tag.
+
+**`build/models-source.sh`** went from platform-detection to a simpler and more honest
+question — *are the weights already present?* It reports `baked` (present, skip the download)
+or `download` (absent, fetch), with `BULK_MODELS_SOURCE` to force either. Verified: weights
+absent → download, weights present → baked, forced values honoured.
+
 ### Why the first chunked build did not change the layer shape
 
 The build went green and the log clearly showed chunking working — "19998 MB -> 6 chunks of

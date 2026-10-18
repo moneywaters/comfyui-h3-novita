@@ -1,10 +1,14 @@
 #!/bin/bash
 # Download the model weights for ONE part into /opt/ComfyUI/models.
-# Invoked at image-build time by Dockerfile.models (baked into a layer).
 #
-# Two images are composed from these parts (see .github/workflows/build.yml):
-#   A  comfyui-h3-novita    ~86 GB  H3 video generation
-#   B  comfyui-qwen-novita  ~49 GB  Qwen 2.1 image editing + the spare H3 variants
+# Called at RUNTIME, on a fresh instance, by build/fetch-models-boot.sh. The image ships
+# no weights (see that file's header), so this is how models ever arrive.
+#
+# The part list maps to the workflows shipped in the image:
+#   H3 video generation        h3-fl2va, h3-singularity, h3enc, h3vae-*, h3loras, h3extra
+#   SeedVR2 bulk upscaling     seedvr2
+#   Qwen 2.1 image editing     qwen-diff, qwen-enc, qwen-vae, qwen-loras
+#                              (+ h3-ref2va-org, the stock ref2va used by image B)
 set -uo pipefail
 
 M="${COMFYUI_PATH:-/opt/ComfyUI}/models"

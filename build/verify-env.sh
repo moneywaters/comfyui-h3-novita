@@ -228,71 +228,35 @@ else
 fi
 
 
-echo "=== simplepod layering / chunked weights ==="
-# SimplePod hosts will not unpack a ~21 GB layer (their console loops "Pulling image"
-# forever while diskUsage stays 0.00). Models above the threshold must therefore ship as
-# chunks, and the stitcher must be present to put them back.
-if [ -x /opt/stitch-models.sh ] && [ -f /opt/stitch-models.py ]; then
-    echo "  OK  stitcher present"
+echo "=== weights: code-only image, fetched at boot ==="
+# The image deliberately ships NO model weights so it can be pulled anywhere -- SimplePod's
+# hosts looped forever on our old ~21 GB model layers and never started the container.
+# start.sh downloads them from Hugging Face on first boot.
+if [ -x /opt/fetch-models-boot.sh ] && [ -x /opt/models-source.sh ] && [ -x /opt/models-part.sh ]; then
+    echo "  OK  downloader present (models-source + fetch-models-boot + models-part)"
 else
-    echo "  BAD stitcher missing -- chunked weights would never be reassembled"; FAIL=$((FAIL+1))
+    echo "  BAD weight downloader incomplete -- the container would start with no models"
+    FAIL=$((FAIL+1))
 fi
-if grep -q 'stitch-models.sh' /opt/start.sh 2>/dev/null; then
-    echo "  OK  start.sh reassembles chunked weights at boot"
-else
-    echo "  BAD start.sh does not reassemble chunked weights"; FAIL=$((FAIL+1))
-fi
-
-# Report the real layer-shape facts the build produced: any model file still present at
-# over ~4 GB means chunking was skipped, which is the exact condition that fails on
-# SimplePod. Printed as a warning rather than a hard failure because PPIO and Novita
-# serve this image fine either way.
-BIG=$(find /opt/ComfyUI/models -maxdepth 2 -type f \( -name '*.safetensors' -o -name '*.gguf' \) \
-        -size +4G 2>/dev/null | head -20)
-if [ -n "$BIG" ]; then
-    echo "  WARN unchunked model file(s) over 4 GB (SimplePod may refuse to unpack):"
-    echo "$BIG" | while read -r f; do printf '        %s\n' "$(basename "$f")"; done
-else
-    echo "  OK  no model file over 4 GB (SimplePod-safe layer shape)"
-fi
-CHUNKS=$(find /opt/ComfyUI/models -maxdepth 2 -type f -name '*.part[0-9][0-9][0-9]' 2>/dev/null | wc -l | tr -d ' ')
-echo "  chunk files present: $CHUNKS"
-if [ "$CHUNKS" -gt 0 ]; then
-    if python3 /opt/stitch-models.py --models-dir /opt/ComfyUI/models --all --list 2>/dev/null | grep -q missing; then
-        echo "  OK  at least one model needs stitching at boot (lazy path exercised)"
-    else
-        echo "  OK  all chunked models already stitched"
-    fi
-fi
-
-
-echo "=== platform-aware weight sourcing ==="
-# The image carries weights for PPIO/Novita, which prewarm it. SimplePod cannot unpack the
-# big layers at all, so there it must fetch from Hugging Face instead. All four scripts
-# below have to be present for that to work end to end.
-for f in /opt/models-source.sh /opt/fetch-models-boot.sh /opt/models-part.sh /opt/chunk-model.sh; do
-    if [ -x "$f" ]; then
-        echo "  OK  $(basename "$f")"
-    else
-        echo "  BAD $f missing/not executable (weight sourcing broken)"; FAIL=$((FAIL+1))
-    fi
-done
-# start.sh must consult the decision before it tries to stitch or normalise
 if grep -q 'fetch-models-boot.sh' /opt/start.sh 2>/dev/null; then
-    echo "  OK  start.sh provisions weights for the platform"
+    echo "  OK  start.sh provisions weights at boot"
 else
     echo "  BAD start.sh never calls fetch-models-boot.sh"; FAIL=$((FAIL+1))
 fi
-# chunking must be OFF by default so the runtime download path writes whole files
-if grep -q 'CHUNK_MODELS:-0' /opt/models-part.sh 2>/dev/null; then
-    echo "  OK  chunking gated to build time (CHUNK_MODELS defaults 0)"
+
+# The image must not carry the big weights -- that is the whole point. A checkout of the
+# build context is not available here, so measure the live filesystem: the models tree
+# should be empty (or absent) in the image, since anything present would have come from
+# the build and would defeat the design.
+BIG=$(find /opt/ComfyUI/models -type f \( -name '*.safetensors' -o -name '*.gguf' \) -size +100M 2>/dev/null | head -5)
+if [ -n "$BIG" ]; then
+    echo "  BAD image contains large model files (it must be code-only):"
+    echo "$BIG" | while read -r f; do printf '        %s\n' "$f"; done
+    FAIL=$((FAIL+1))
 else
-    echo "  BAD models-part.sh would chunk runtime downloads (models would vanish)"; FAIL=$((FAIL+1))
+    echo "  OK  image ships no large model files (code-only)"
 fi
-# and the resolved decision, so a boot log shows which way this image went
-if [ -x /opt/models-source.sh ]; then
-    printf '  resolved weights source: %s\n' "$(/opt/models-source.sh 2>/dev/null | tail -1)"
-fi
+printf '  resolved weights source: %s\n' "$(/opt/models-source.sh 2>/dev/null | tail -1)"
 
 echo "=== sshd ==="
 test -x /usr/sbin/sshd && echo "  OK sshd present" || { echo "  BAD sshd missing"; FAIL=$((FAIL+1)); }

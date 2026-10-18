@@ -52,13 +52,10 @@ mkdir -p /var/log
 # Blend a base + overlay checkpoint requires matching key sets; Singularity ships the
 # "model.diffusion_model." prefix and fl2va does not, which makes HybridLoader refuse.
 # Header-only rewrite, milliseconds, idempotent -- see build/normalize-models.sh.
-# Rebuild any weights shipped as chunks BEFORE normalise-models, because normalise
-# rewrites the safetensors header and needs the whole file present.
-#
-# Default scope is diffusion_models only -- those are the two ~20 GB files that are both
-# the ones SimplePod could not unpack and the ones a user reaches for first. Everything
-# else stays lazy so PPIO and Novita, which pull this image happily, pay nothing extra.
-# Set MODELS_REASSEMBLE_ALL=1 to stitch every chunked model at boot instead.
+# Weights arrive here, not in the image: the image is code-only so it can be pulled
+# anywhere. On a container restart they are already on disk and this is a no-op; on a
+# fresh instance it downloads them from Hugging Face. Runs before normalize-models,
+# which rewrites safetensors headers and needs whole files.
 # Where do the weights come from? On PPIO and Novita the image holds them and this is a
 # no-op. On SimplePod the baked weights cannot be unpacked at all (their hosts loop on a
 # ~21 GB layer forever), so this fetches them from Hugging Face instead. The decision and
@@ -66,14 +63,6 @@ mkdir -p /var/log
 if [ -x /opt/fetch-models-boot.sh ]; then
     bash /opt/fetch-models-boot.sh 2>&1 | sed 's/^/[models] /' || \
         log "WARN: model provisioning reported a problem (continuing to start ComfyUI)"
-fi
-
-# Only meaningful when the weights came from the image: stitching rebuilds the chunk files
-# that were baked in. On the download path models-part.sh writes whole files, so there is
-# nothing to stitch and this exits immediately.
-if [ -x /opt/stitch-models.sh ]; then
-    log "assembling chunked model weights (image-supplied only)"
-    bash /opt/stitch-models.sh 2>&1 | sed 's/^/[stitch] /' || log "WARN: stitch-models failed"
 fi
 
 if [ -x /opt/normalize-models.sh ]; then
