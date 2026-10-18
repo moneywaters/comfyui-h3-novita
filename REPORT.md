@@ -767,6 +767,43 @@ Commands are now `menu` (default), `launch`, `clusters`, `products`, `prewarm-li
 
 
 
+
+### One codebase, two tags: weights baked for PPIO/Novita, code-only for SimplePod
+
+The image now answers a single question at boot — **are the weights already on disk?** —
+instead of trying to detect the platform. That makes one Dockerfile serve all three.
+
+| tag | contents | size | who runs it |
+|---|---|---|---|
+| `:latest` / `:sha-<id>` | code only | 12.9 GB | SimplePod (its hosts cannot unpack our ~20 GB layers) |
+| `:models` / `:sha-<id>-models` | weights baked in | ~83 GB | PPIO and Novita, which prewarm it for instant boots |
+
+Both tags carry identical code, including `fetch-models-boot.sh`. On `:models` the weights
+are present and it returns immediately; on `:latest` they are absent and it downloads them
+from Hugging Face once, after which a container restart reuses them.
+
+**Why not platform sniffing.** I could detect SimplePod from `/app` or `/workspace` mounts,
+but that is a guess, and a wrong guess means either a customer waiting 40 GB of downloads
+they did not need, or a container that cannot start. Making the tag carry the answer is
+explicit: the operator chooses the trade-off by choosing the tag, and the image still
+behaves correctly if that choice is ever wrong.
+
+**Dockerfile.env gains `ARG BAKED_MODELS`.** The weights RUN is deliberately its own
+instruction, so a code-only build never carries that layer, and a failed part fails the
+build rather than shipping a half-baked image.
+
+**The workflow builds both, then asserts they differ the right way:** `:latest` must have
+zero model files over 100 MB, `:models` must have some, and both must carry the boot
+scripts. If both tags ever come out the same, a platform is silently broken — so it fails
+the build instead.
+
+**Builder hardening from the first attempt.** `h3-fl2va`, `h3-singularity` and `h3enc`
+downloaded fine (55 GB) but `h3vae-kijai` failed with `WARN download failed`. The file
+exists and serves (verified: HTTP 302 to the CDN), so it was a stalled transfer that
+curl's own `--retry` does not recover from. The fetcher now wraps curl in an outer attempt
+loop with **`-C -` resume**, so a 20 GB transfer that dies at 90% continues instead of
+restarting, and the bake loop retries a failed part once before giving up.
+
 ### The image is code-only; weights come from Hugging Face at boot
 
 **This is the design now, and it replaces the chunking approach.** Chunking was the wrong

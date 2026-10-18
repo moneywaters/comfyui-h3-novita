@@ -29,22 +29,30 @@ fetch() {  # <subdir> <filename> <url> <min-bytes>
         rm -f "$dest"
     fi
     echo "  GET $subdir/$name"
-    if "$CURL" --fail --location --silent --show-error \
-            --retry 6 --retry-delay 5 --retry-all-errors --create-dirs \
+    # Outer attempt loop with RESUME. curl's own --retry gives up on a CDN redirect that
+    # stalls mid-body, which is what killed the h3vae-kijai fetch: the file exists and
+    # serves fine on a later try. -C - continues a partial file, so a 20 GB transfer that
+    # dies at 90% costs seconds rather than minutes.
+    local attempt=1 got=0
+    while [ "$attempt" -le 4 ]; do
+        "$CURL" --fail --location --silent --show-error \
+            --retry 8 --retry-delay 5 --retry-all-errors --create-dirs \
+            --connect-timeout 30 --max-time 3600 \
+            -C - \
             -H "Authorization: Bearer ${HF}" \
-            -o "$dest.partial" "$url"; then
-        local got; got=$(stat -c%s "$dest.partial" 2>/dev/null || echo 0)
+            -o "$dest.partial" "$url"
+        got=$(stat -c%s "$dest.partial" 2>/dev/null || echo 0)
         if [ "$got" -ge "$minbytes" ]; then
             mv -f "$dest.partial" "$dest"
-            echo "  OK $subdir/$name ($((got/1048576)) MB)"
+            echo "  OK $subdir/$name ($((got/1048576)) MB, attempt $attempt)"
             return 0
         fi
-        echo "  WARN truncated $name ($((got/1048576)) MB)"
-        rm -f "$dest.partial"
-    else
-        echo "  WARN download failed $name"
-        rm -f "$dest.partial"
-    fi
+        echo "  retry $attempt: have $((got/1048576)) MB of >= $((minbytes/1048576)) MB"
+        attempt=$((attempt+1))
+        sleep $((attempt * 5))
+    done
+    echo "  WARN download failed $name after retries ($((got/1048576)) MB)"
+    rm -f "$dest.partial"
     FAILED=$((FAILED+1)); return 1
 }
 
