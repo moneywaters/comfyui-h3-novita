@@ -40,6 +40,8 @@ permissions:
 env:
   IMAGE_A: comfyui-h3-novita
   IMAGE_B: comfyui-qwen-novita
+  # PARTS is for the compose step; the matrix above lists the same parts inline,
+  # because GitHub Actions does not allow env.* inside a matrix expression.
   PARTS: h3-fl2va,h3-singularity,h3enc,h3vae-kijai,h3vae-audio,h3loras,h3extra,seedvr2
 
 jobs:
@@ -104,7 +106,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: ${{ fromJSON(format('["{0}"]', replace(env.PARTS, ',', '","'))) }}
+        part: ["h3-fl2va", "h3-singularity", "h3enc", "h3vae-kijai", "h3vae-audio", "h3loras", "h3extra", "seedvr2"]
     steps:
       - uses: actions/checkout@v4
 
