@@ -765,6 +765,38 @@ Commands are now `menu` (default), `launch`, `clusters`, `products`, `prewarm-li
 
 
 
+
+### Why the first chunked build did not change the layer shape
+
+The build went green and the log clearly showed chunking working — "19998 MB -> 6 chunks of
+<=3500 MB", "removed the original (reassembled at boot)", and the verify step printed
+`OK  no model file over 4 GB`. But the pushed images were unchanged:
+
+| tag | layers | largest |
+|---|---|---|
+| sha-9ba51985e251 (before) | 63 | 20.96, 20.95, 14.88, 7.28, 5.20 |
+| sha-c87358278e8d (after) | 78 | **20.95**, 20.95, 14.87, 7.28, 5.20 |
+
+Still five layers over 4 GB, and the part images showed the same single 20.95 GB layer.
+
+**Cause: the download and the chunking were in the SAME `RUN`.** podman diffs a layer by
+what the *instruction created*, not by its final state, so the 20 GB safetensors —
+downloaded and then split and deleted inside one instruction — was still captured whole.
+`compose-image.py` appends only the trailing layers a part adds, so the fat layer that
+should have been dropped was in fact the only one being kept.
+
+**Fix:** `Dockerfile.models` now has the fetch as one `RUN` and the chunking as the next.
+The 20 GB file lands in its own layer, which compose drops, leaving the ~3.5 GB chunks.
+
+**And a check that can actually catch this:** the previous verification ran on the env
+image, where no models exist yet, so it could never see a bad part layer. The models image
+now asserts, in the same `RUN` that chunks, that `find ... -size +4G` is empty and **fails
+the build** if any model file is still oversized.
+
+Validated without a daemon: the Dockerfile parses to 11 well-formed instructions and the
+new chunk `RUN` body passes `sh -n`. Also corrected `ARG PART=h3diff`, a default that never
+matched any real PART.
+
 ### Platform-aware weights: baked on PPIO/Novita, downloaded on SimplePod
 
 SimplePod will not unpack this image's ~21 GB layers, so the baked weights are unreachable

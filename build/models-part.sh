@@ -138,27 +138,6 @@ case "$PART" in
   *) echo "ERROR: unknown PART '$PART'"; exit 1;;
 esac
 
-# Split oversized weights into sub-4 GB chunks. SimplePod hosts will not unpack a
-# ~21 GB layer (their console loops "Pulling image" forever, diskUsage never moves),
-# while PPIO and Novita pull this image fine. Chunking shrinks the largest layer
-# without changing what the model contains; build/stitch-models.py puts it back at
-# boot, lazily, so the platforms that already work pay nothing.
-# Chunk only at IMAGE BUILD time (Dockerfile.models sets CHUNK_MODELS=1).
-#
-# At runtime -- SimplePod's boot download via fetch-models-boot.sh -- the files must stay
-# whole: ComfyUI loads them by name, and that path has no stitch step, so splitting here
-# would leave every model invisible. Defaulting to 0 makes the runtime path correct without
-# it having to know about this at all.
-if [ "${CHUNK_MODELS:-0}" = "1" ] && [ -x /opt/chunk-model.sh ]; then
-    shopt -s nullglob
-    for f in "$M"/diffusion_models/*.safetensors "$M"/text_encoders/*.safetensors \
-             "$M"/vae/*.safetensors "$M"/SEEDVR2/*.safetensors; do
-        [ -f "$f" ] || continue
-        bash /opt/chunk-model.sh "$f" 3500 | sed 's/^/  /'
-    done
-    shopt -u nullglob
-fi
-
 echo "=== $PART tree ==="; du -sh "$M"/* 2>/dev/null | sort -rh | head
 if [ "$FAILED" -gt 0 ]; then echo "ERROR: $FAILED download(s) failed"; exit 1; fi
 echo "=== PART $PART complete ==="
