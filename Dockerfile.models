@@ -1,0 +1,42 @@
+# =============================================================================
+# Model weight layers, built SEPARATELY from the env image and composed at the
+# registry.
+#
+#   podman build --build-arg PART=h3-fl2va -f Dockerfile.models .
+#
+# Why separate: baking all 8 weight parts into one image needs ~123 GB at peak on
+# the build host (43 GB of weights, plus podman's layer tar doubling the part
+# being committed, plus the ~35 GB base), and a GitHub runner has 110 GB free --
+# it dies with "no space left on device" while committing. Building each part as
+# its own image means no single runner ever holds more than one part, and
+# ops/compose-image.py then appends only the new layers onto the env image.
+#
+# Built FROM the same nvidia/cuda base as Dockerfile.env so the extra layers are
+# pure "model file" overlays and the shared prefix can be dropped at compose time.
+#
+# NOTE: curl is installed here from apt. That rewrite of /var/lib/dpkg/status is
+# inherited by the composed image, which is cosmetically inaccurate for packages
+# but has no effect at runtime (nothing in the container runs apt).
+# =============================================================================
+FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG PART=h3-fl2va
+ARG HF_TOKEN=""
+ARG WITH_PE=0
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --version | head -1
+
+COPY build/models-part.sh /opt/models-part.sh
+RUN chmod +x /opt/models-part.sh
+
+# One part per image, so this layer is one model (3-20 GB) and commits reliably.
+RUN --mount=type=secret,id=hf_token,required=false \
+    export HF_TOKEN="${HF_TOKEN:-$(cat /run/secrets/hf_token 2>/dev/null || true)}" \
+    && PART="${PART}" WITH_PE="${WITH_PE}" bash /opt/models-part.sh
+
+# Report what landed, so the build log shows the layer contents without a shell.
+RUN du -sh /opt/ComfyUI/models/* 2>/dev/null | sort -rh | head -6 || true

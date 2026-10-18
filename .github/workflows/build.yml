@@ -1,25 +1,30 @@
 name: Build & push ComfyUI images
 
-# ONE codebase, TWO tags. The image decides for itself at boot; the tag decides the
-# trade-off, and the operator picks the tag per platform.
+# TWO VARIANTS of the same codebase. The tag carries the trade-off; the image decides for
+# itself at boot whether it already has the weights.
 #
 #   :latest / :sha-<id>          code only, ~13 GB. SimplePod runs THIS: its hosts loop
 #                                forever on our ~20 GB weight layers and never start.
 #                                Weights are fetched from Hugging Face on first boot.
 #   :models / :sha-<id>-models   weights baked in, ~83 GB. PPIO and Novita prewarm THIS,
-#                                so their boots stay instant and offline.
+#                                so their boots stay instant and need no HF token.
 #
-# Both tags carry identical code, including build/fetch-models-boot.sh, which asks one
-# question at boot: are the weights already on disk? Present -> return. Absent -> download.
-# That is why no platform sniffing is needed -- the presence of the weights IS the signal.
+# Both carry identical code including build/fetch-models-boot.sh, which asks one question:
+# are the weights already on disk? Present -> return. Absent -> download. So no platform
+# sniffing is needed -- the presence of the weights IS the signal.
 #
-# Two jobs, because a GitHub runner has ~43 GB free and the two variants together are
-# ~96 GB. Each job gets its own runner; they run in parallel, which is also faster.
+# WHY THE WEIGHTS ARE BUILT AS SEPARATE PART IMAGES
+# Baking all 8 parts into one image needs ~123 GB at peak on the build host: 43 GB of
+# weights, plus podman taring the layer it is committing, plus the ~35 GB base. A GitHub
+# runner has 110 GB free, so it dies with "no space left on device" while committing --
+# measured, twice. Each part therefore gets its own image and its own runner, and
+# ops/compose-image.py appends only the new layers onto the env image at the registry.
+# No single runner ever holds more than one part.
 #
-# Two repo NAMES are published as well, because the PPIO and Novita launchers ask for
-# different ones. Both names get both tags.
+# Two repo NAMES are published because the PPIO and Novita launchers ask for different
+# ones; both names get both variants.
 #
-# Required repository secrets: DOCKER_USER, DOCKER_PASS, HF_TOKEN (for the :models tag)
+# Required repository secrets: DOCKER_USER, DOCKER_PASS, HF_TOKEN
 
 on:
   workflow_dispatch:
@@ -35,8 +40,10 @@ permissions:
 env:
   IMAGE_A: comfyui-h3-novita
   IMAGE_B: comfyui-qwen-novita
+  PARTS: h3-fl2va,h3-singularity,h3enc,h3vae-kijai,h3vae-audio,h3loras,h3extra,seedvr2
 
 jobs:
+  # ---------------------------------------------------------------- code-only variant
   code-only:
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -90,19 +97,16 @@ jobs:
           done
           echo "### SIMPLEPOD / CODE-ONLY: sha-${ID}"
 
-  with-models:
+  # ---------------------------------------------------------------- per-part weight images
+  part:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        part: ${{ fromJSON(format('["{0}"]', replace(env.PARTS, ',', '","'))) }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
-          sudo rm -rf /usr/local/share/boost /usr/share/swift /usr/lib/jvm || true
-          sudo rm -rf /usr/local/lib/node_modules /usr/share/mysql /usr/share/postgresql || true
-          sudo apt-get clean
-          df -h /
 
       - name: Ensure podman
         run: |
@@ -119,44 +123,64 @@ jobs:
           install -m 600 /dev/null /tmp/hf_token
           printf '%s' "${{ secrets.HF_TOKEN }}" > /tmp/hf_token
 
-      - name: Build with weights baked in
+      - name: Build this part
         run: |
           set -euo pipefail
           IMAGE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}"
           podman build --format docker \
             --secret id=hf_token,src=/tmp/hf_token \
-            --build-arg BAKED_MODELS=1 \
-            --build-arg TORCH_INDEX="${{ inputs.torch_index }}" \
-            --build-arg SSH_AUTHORIZED_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG6eQLbiJEo7wKVDj+1BswTpRJ2C8BU/hMFxhDYweS0n novita" \
-            -t "${IMAGE}:models" \
-            -f Dockerfile.env .
-          podman image inspect "${IMAGE}:models" --format 'with-models size {{.Size}} bytes'
+            --build-arg PART="${{ matrix.part }}" \
+            -t "${IMAGE}:part-${{ matrix.part }}" \
+            -f Dockerfile.models .
+          podman image inspect "${IMAGE}:part-${{ matrix.part }}" --format 'size {{.Size}} bytes'
           df -h /
+
+      - name: Push this part
+        run: |
+          set -euo pipefail
+          podman push "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:part-${{ matrix.part }}"
 
       - name: Cleanup token
         if: always()
         run: rm -f /tmp/hf_token
 
-      - name: Assert it carries the weights
-        run: |
-          set -euo pipefail
-          IMAGE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:models"
-          N=$(podman run --rm --entrypoint sh "$IMAGE" -c \
-            "find /opt/ComfyUI/models -type f \( -name '*.safetensors' -o -name '*.gguf' \) -size +100M 2>/dev/null | wc -l" || echo 0)
-          echo "large model files: $N"
-          [ "$(echo "$N" | tr -d ' ')" -gt 0 ] || { echo "ERROR: :models has no weights"; exit 1; }
-          podman run --rm --entrypoint sh "$IMAGE" -c "du -sh /opt/ComfyUI/models"
-          echo "OK: weights baked in"
+  # ---------------------------------------------------------------- compose + publish
+  publish:
+    needs: [code-only, part]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Push both repo names
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASS }}" | podman login docker.io -u "${{ secrets.DOCKER_USER }}" --password-stdin || true
+
+      - name: Compose the with-weights variant
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
         run: |
           set -euo pipefail
-          BASE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}"
-          ID=$(podman image inspect "${BASE}:models" --format '{{.Id}}' | sed 's/^sha256://' | cut -c1-12)
-          for REPO in "${{ env.IMAGE_A }}" "${{ env.IMAGE_B }}"; do
-            for TAG in models "sha-${ID}-models"; do
-              podman tag "${BASE}:models" "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:${TAG}"
-              podman push "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:${TAG}"
-            done
-          done
-          echo "### PPIO/NOVITA PREWARM: sha-${ID}-models"
+          prefix() { local out=""; for p in $(echo "$1" | tr ',' ' '); do out="${out}${out:+,}part-${p}"; done; echo "$out"; }
+
+          echo "### composing ${IMAGE_A}:models from part-* images"
+          python3 ops/compose-image.py --repo "${DOCKER_USER}/${IMAGE_A}" \
+            --env part-env --parts "$(prefix "$PARTS")" --out models
+
+          # Image B is byte-identical; only the NAME differs, because the PPIO and Novita
+          # launchers ask for comfyui-qwen-novita when a Qwen run is wanted. Publish the
+          # same manifest under the second repo by copying it at the registry -- cheaper
+          # and exact, versus re-pushing 83 GB.
+          echo "### publishing the same manifest as ${IMAGE_B}:models"
+          python3 ops/copy-tag.py \
+            --from-repo "${DOCKER_USER}/${IMAGE_A}" --from-tag models \
+            --to-repo   "${DOCKER_USER}/${IMAGE_B}" --to-tag   models \
+            --to-tag-also latest
+
+      - name: Report the content tags
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+        run: |
+          set -euo pipefail
+          python3 ops/check-sizes.py "${DOCKER_USER}/${IMAGE_A}" "${DOCKER_USER}/${IMAGE_B}" || true
+          echo "### PPIO/NOVITA PREWARM: ${IMAGE_A}:models"
