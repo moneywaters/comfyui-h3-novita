@@ -1,10 +1,11 @@
 #!/bin/bash
 # Boot-time weight provisioning, driven by models-source.sh's decision.
 #
-#   baked     -> nothing to do; the image already holds the weights (PPIO, Novita, and
-#                anything else, where the image prewarms and a boot should be fast)
-#   download  -> fetch from Hugging Face instead (SimplePod, whose hosts cannot unpack our
-#                ~21 GB layers, so the baked weights are unreachable anyway)
+#   baked     -> nothing to do; the weights are already on disk. That is the :models tag,
+#                which PPIO and Novita prewarm, and also any restart of a container that
+#                has already downloaded them.
+#   download  -> fetch from Hugging Face. That is the code-only tag, which SimplePod must
+#                use because its hosts cannot unpack our ~20 GB weight layers.
 #
 # On the download path this reuses build/models-part.sh, which is already the Hugging Face
 # fetcher used at image-build time: per-file curl with retries, a minimum-size sanity check
