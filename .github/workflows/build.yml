@@ -1,29 +1,25 @@
 name: Build & push ComfyUI images
 
-# ONE codebase, TWO tags, and the image decides for itself at boot.
+# ONE codebase, TWO tags. The image decides for itself at boot; the tag decides the
+# trade-off, and the operator picks the tag per platform.
 #
-#   :models  (and :sha-<id>)  weights baked in. PPIO and Novita prewarm THIS tag, so their
-#                             boots are instant. ~83 GB.
-#   :latest  (and :sha-<id>)  code only. SimplePod must use this: its hosts loop forever on
-#                             our ~20 GB weight layers and never start the container.
-#                             ~7 GB, weights fetched from Hugging Face on first boot.
+#   :latest / :sha-<id>          code only, ~13 GB. SimplePod runs THIS: its hosts loop
+#                                forever on our ~20 GB weight layers and never start.
+#                                Weights are fetched from Hugging Face on first boot.
+#   :models / :sha-<id>-models   weights baked in, ~83 GB. PPIO and Novita prewarm THIS,
+#                                so their boots stay instant and offline.
 #
-# Both tags ship the same code, including build/fetch-models-boot.sh, which asks a single
-# question at boot -- are the weights already on disk? Present: do nothing. Absent: fetch
-# them. That is why no platform sniffing is needed: the presence of the weights IS the
-# signal, and each platform simply runs the tag whose trade-off suits it.
+# Both tags carry identical code, including build/fetch-models-boot.sh, which asks one
+# question at boot: are the weights already on disk? Present -> return. Absent -> download.
+# That is why no platform sniffing is needed -- the presence of the weights IS the signal.
 #
-# Why: our previous ~86 GB images carried ~62 GB of weights as single ~20 GB layers, and
-# SimplePod's hosts would not unpack them -- their console looped "Preparing instance /
-# Pulling image" forever while diskUsage stayed at 0.00, and the container never started.
-# Reproduced on host 216 (RTX 4090) and host 161 (RTX 3090) at both 100 GB and 200 GB disk,
-# while a 7 GB control image booted on those same hosts in ~300 seconds.
+# Two jobs, because a GitHub runner has ~43 GB free and the two variants together are
+# ~96 GB. Each job gets its own runner; they run in parallel, which is also faster.
 #
-# Two image NAMES are also published because the PPIO and Novita launchers ask for
-# different ones; both names get both tags.
+# Two repo NAMES are published as well, because the PPIO and Novita launchers ask for
+# different ones. Both names get both tags.
 #
-# Required repository secrets: DOCKER_USER, DOCKER_PASS
-# HF_TOKEN is NOT needed by this workflow -- only at runtime, by the instance.
+# Required repository secrets: DOCKER_USER, DOCKER_PASS, HF_TOKEN (for the :models tag)
 
 on:
   workflow_dispatch:
@@ -41,14 +37,72 @@ env:
   IMAGE_B: comfyui-qwen-novita
 
 jobs:
-  build:
+  code-only:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show disk
-        run: df -h /
+      - name: Ensure podman
+        run: |
+          if ! command -v podman >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq podman
+          fi
+          podman --version
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASS }}" | podman login docker.io -u "${{ secrets.DOCKER_USER }}" --password-stdin
+
+      - name: Build code-only
+        run: |
+          set -euo pipefail
+          IMAGE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}"
+          podman build --format docker \
+            --build-arg BAKED_MODELS=0 \
+            --build-arg TORCH_INDEX="${{ inputs.torch_index }}" \
+            --build-arg SSH_AUTHORIZED_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG6eQLbiJEo7wKVDj+1BswTpRJ2C8BU/hMFxhDYweS0n novita" \
+            -t "${IMAGE}:latest" \
+            -f Dockerfile.env .
+          podman image inspect "${IMAGE}:latest" --format 'code-only size {{.Size}} bytes'
+
+      - name: Assert it carries no weights
+        run: |
+          set -euo pipefail
+          IMAGE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:latest"
+          N=$(podman run --rm --entrypoint sh "$IMAGE" -c \
+            "find /opt/ComfyUI/models -type f \( -name '*.safetensors' -o -name '*.gguf' \) -size +100M 2>/dev/null | wc -l" || echo 0)
+          echo "large model files: $N"
+          [ "$(echo "$N" | tr -d ' ')" = "0" ] || { echo "ERROR: :latest must be code-only"; exit 1; }
+          podman run --rm --entrypoint sh "$IMAGE" -c \
+            "ls -l /opt/fetch-models-boot.sh /opt/models-source.sh /opt/models-part.sh"
+          echo "OK: code-only"
+
+      - name: Push both repo names
+        run: |
+          set -euo pipefail
+          BASE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}"
+          ID=$(podman image inspect "${BASE}:latest" --format '{{.Id}}' | sed 's/^sha256://' | cut -c1-12)
+          for REPO in "${{ env.IMAGE_A }}" "${{ env.IMAGE_B }}"; do
+            for TAG in latest "sha-${ID}"; do
+              podman tag "${BASE}:latest" "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:${TAG}"
+              podman push "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:${TAG}"
+            done
+          done
+          echo "### SIMPLEPOD / CODE-ONLY: sha-${ID}"
+
+  with-models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf /usr/local/share/boost /usr/share/swift /usr/lib/jvm || true
+          sudo rm -rf /usr/local/lib/node_modules /usr/share/mysql /usr/share/postgresql || true
+          sudo apt-get clean
+          df -h /
 
       - name: Ensure podman
         run: |
@@ -65,20 +119,7 @@ jobs:
           install -m 600 /dev/null /tmp/hf_token
           printf '%s' "${{ secrets.HF_TOKEN }}" > /tmp/hf_token
 
-      - name: Build code-only (:latest)
-        run: |
-          set -euo pipefail
-          IMAGE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}"
-          podman build --format docker \
-            --build-arg BAKED_MODELS=0 \
-            --build-arg TORCH_INDEX="${{ inputs.torch_index }}" \
-            --build-arg SSH_AUTHORIZED_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG6eQLbiJEo7wKVDj+1BswTpRJ2C8BU/hMFxhDYweS0n novita" \
-            -t "${IMAGE}:latest" \
-            -f Dockerfile.env .
-          podman image inspect "${IMAGE}:latest" --format 'code-only size {{.Size}} bytes'
-          df -h /
-
-      - name: Build with weights baked in (:models)
+      - name: Build with weights baked in
         run: |
           set -euo pipefail
           IMAGE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}"
@@ -96,64 +137,26 @@ jobs:
         if: always()
         run: rm -f /tmp/hf_token
 
-      - name: Assert the two tags differ the right way
-        # This is the property the whole design rests on: one tag must carry weights (for
-        # PPIO/Novita prewarms) and the other must not (for SimplePod, whose hosts cannot
-        # unpack a ~20 GB layer). If both end up the same, a platform is silently broken.
+      - name: Assert it carries the weights
         run: |
           set -euo pipefail
-          CODE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:latest"
-          WITH="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:models"
+          IMAGE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:models"
+          N=$(podman run --rm --entrypoint sh "$IMAGE" -c \
+            "find /opt/ComfyUI/models -type f \( -name '*.safetensors' -o -name '*.gguf' \) -size +100M 2>/dev/null | wc -l" || echo 0)
+          echo "large model files: $N"
+          [ "$(echo "$N" | tr -d ' ')" -gt 0 ] || { echo "ERROR: :models has no weights"; exit 1; }
+          podman run --rm --entrypoint sh "$IMAGE" -c "du -sh /opt/ComfyUI/models"
+          echo "OK: weights baked in"
 
-          count() {  # how many >100 MB model files are in the image
-            podman run --rm --entrypoint sh "$1" -c \
-              "find /opt/ComfyUI/models -type f \( -name '*.safetensors' -o -name '*.gguf' \) -size +100M 2>/dev/null | wc -l" || echo 0
-          }
-
-          ncode=$(count "$CODE" | tr -d ' ')
-          nwith=$(count "$WITH" | tr -d ' ')
-          echo "code-only (:latest) large model files: $ncode"
-          echo "baked     (:models) large model files: $nwith"
-
-          if [ "$ncode" != "0" ]; then
-            echo "ERROR: :latest must be code-only but carries $ncode large model file(s)"
-            exit 1
-          fi
-          if [ "$nwith" -lt 1 ]; then
-            echo "ERROR: :models must carry the weights but has none -- PPIO/Novita prewarms"
-            echo "       would silently fall back to downloading at boot"
-            exit 1
-          fi
-
-          # both tags must carry the boot logic, or the self-deciding behaviour is broken
-          for t in "$CODE" "$WITH"; do
-            podman run --rm --entrypoint sh "$t" -c \
-              "ls -l /opt/fetch-models-boot.sh /opt/models-source.sh /opt/models-part.sh" >/dev/null
-          done
-          echo "OK: :latest is code-only, :models carries weights, both have the boot logic"
-
-      - name: Push both image names with both tags
+      - name: Push both repo names
         run: |
           set -euo pipefail
           BASE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}"
-          CODE_ID=$(podman image inspect "${BASE}:latest" --format '{{.Id}}' | sed 's/^sha256://' | cut -c1-12)
-          WITH_ID=$(podman image inspect "${BASE}:models" --format '{{.Id}}' | sed 's/^sha256://' | cut -c1-12)
-          echo "code-only content tag -> sha-${CODE_ID}"
-          echo "with-weights content tag -> sha-${WITH_ID}"
-
+          ID=$(podman image inspect "${BASE}:models" --format '{{.Id}}' | sed 's/^sha256://' | cut -c1-12)
           for REPO in "${{ env.IMAGE_A }}" "${{ env.IMAGE_B }}"; do
-            # code-only: the default every launcher should use for SimplePod
-            podman tag "${BASE}:latest"  "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:latest"
-            podman push "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:latest"
-            podman tag "${BASE}:latest"  "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:sha-${CODE_ID}"
-            podman push "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:sha-${CODE_ID}"
-            # weights baked in: what PPIO/Novita prewarm for instant boots
-            podman tag "${BASE}:models"  "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:models"
-            podman push "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:models"
-            podman tag "${BASE}:models"  "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:sha-${WITH_ID}-models"
-            podman push "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:sha-${WITH_ID}-models"
-            echo "pushed ${REPO}: code-only sha-${CODE_ID}, with-weights sha-${WITH_ID}"
+            for TAG in models "sha-${ID}-models"; do
+              podman tag "${BASE}:models" "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:${TAG}"
+              podman push "docker.io/${{ secrets.DOCKER_USER }}/${REPO}:${TAG}"
+            done
           done
-
-          echo "### PPIO/NOVITA PREWARM :models  (sha-${WITH_ID})"
-          echo "### SIMPLEPOD RUNS     :latest  (sha-${CODE_ID})"
+          echo "### PPIO/NOVITA PREWARM: sha-${ID}-models"
