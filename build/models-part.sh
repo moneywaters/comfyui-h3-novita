@@ -138,6 +138,21 @@ case "$PART" in
   *) echo "ERROR: unknown PART '$PART'"; exit 1;;
 esac
 
+# Split oversized weights into sub-4 GB chunks. SimplePod hosts will not unpack a
+# ~21 GB layer (their console loops "Pulling image" forever, diskUsage never moves),
+# while PPIO and Novita pull this image fine. Chunking shrinks the largest layer
+# without changing what the model contains; build/stitch-models.py puts it back at
+# boot, lazily, so the platforms that already work pay nothing.
+if [ -x /opt/chunk-model.sh ]; then
+    shopt -s nullglob
+    for f in "$M"/diffusion_models/*.safetensors "$M"/text_encoders/*.safetensors \
+             "$M"/vae/*.safetensors "$M"/SEEDVR2/*.safetensors; do
+        [ -f "$f" ] || continue
+        bash /opt/chunk-model.sh "$f" 3500 | sed 's/^/  /'
+    done
+    shopt -u nullglob
+fi
+
 echo "=== $PART tree ==="; du -sh "$M"/* 2>/dev/null | sort -rh | head
 if [ "$FAILED" -gt 0 ]; then echo "ERROR: $FAILED download(s) failed"; exit 1; fi
 echo "=== PART $PART complete ==="

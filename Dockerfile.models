@@ -25,7 +25,10 @@ RUN apt-get update \
     && curl --version | head -1
 
 COPY build/models-part.sh /opt/models-part.sh
-RUN chmod +x /opt/models-part.sh
+# Splits any weight larger than the threshold into sub-4 GB chunks so no single
+# layer is big enough to break SimplePod's image unpack. Runs inside models-part.sh.
+COPY build/chunk-model.sh /opt/chunk-model.sh
+RUN chmod +x /opt/models-part.sh /opt/chunk-model.sh
 
 RUN --mount=type=secret,id=hf_token,required=false \
     export HF_TOKEN="${HF_TOKEN:-$(cat /run/secrets/hf_token 2>/dev/null || true)}" \

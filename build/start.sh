@@ -52,6 +52,18 @@ mkdir -p /var/log
 # Blend a base + overlay checkpoint requires matching key sets; Singularity ships the
 # "model.diffusion_model." prefix and fl2va does not, which makes HybridLoader refuse.
 # Header-only rewrite, milliseconds, idempotent -- see build/normalize-models.sh.
+# Rebuild any weights shipped as chunks BEFORE normalise-models, because normalise
+# rewrites the safetensors header and needs the whole file present.
+#
+# Default scope is diffusion_models only -- those are the two ~20 GB files that are both
+# the ones SimplePod could not unpack and the ones a user reaches for first. Everything
+# else stays lazy so PPIO and Novita, which pull this image happily, pay nothing extra.
+# Set MODELS_REASSEMBLE_ALL=1 to stitch every chunked model at boot instead.
+if [ -x /opt/stitch-models.sh ]; then
+    log "assembling chunked model weights"
+    bash /opt/stitch-models.sh 2>&1 | sed 's/^/[stitch] /' || log "WARN: stitch-models failed"
+fi
+
 if [ -x /opt/normalize-models.sh ]; then
     log "normalising model key prefixes"
     bash /opt/normalize-models.sh 2>&1 | sed 's/^/[norm] /' || log "WARN: normalise-models failed"

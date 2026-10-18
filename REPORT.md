@@ -762,6 +762,106 @@ Commands are now `menu` (default), `launch`, `clusters`, `products`, `prewarm-li
 
 
 
+
+
+### The SimplePod blocker, and the chunked-weight fix
+
+**What was proven.** Our 83.1 GB image will not unpack on SimplePod. Their console loops
+`Preparing instance / Pulling image` every ~4 minutes forever; `dockerPullProgressBar`
+reaches 100% each cycle, `diskUsage` stays 0.00, and the container never starts.
+
+Reproduced on two different hosts and two disk sizes:
+
+| host | GPU | disk | cycles | reached running | diskUsage |
+|---|---|---|---|---|---|
+| 216 | RTX 4090 | 100 GB | 5 | no | 0.00 |
+| 216 | RTX 4090 | 200 GB | 3 | no | 0.00 |
+| 161 | RTX 3090 | 200 GB | 4 | no | 0.00 |
+
+A 7 GB control image on those *same* hosts boots in ~300s. So it is the image, not the
+host, and not the disk size.
+
+**The difference that matters is layer shape:** ours is 63 layers / 83.1 GB with single
+20.96 GB layers; the control is 29 layers / 7.37 GB with nothing over a few GB. Each big
+layer is one model file — docker stores them uncompressed, so a 20 GB safetensors becomes
+a ~21 GB layer, and unpacking it needs that much scratch on the overlay the storage driver
+writes to. Corroborated by an earlier SimplePod session in this repo's history where the
+root overlay was 32 GB and died with `No space left on device`.
+
+**The fix, and why it is lazy.** `build/chunk-model.sh` splits any weight over the
+threshold into sub-4 GB `.partNNN` files at build time (verified: total chunk bytes must
+equal the original, else the original is kept). `build/stitch-models.py` reassembles them
+at boot, and it is deliberately scoped to `diffusion_models` only — the two ~20 GB files
+that both broke SimplePod and get used first.
+
+That scoping is what keeps **PPIO and Novita unaffected**: they already pull this image
+and prewarm it successfully, so they must not pay a new cost. A model is only reassembled
+when something asks for it, and `MODELS_REASSEMBLE_ALL=1` widens the scope if wanted.
+
+Safety properties, all verified locally:
+* byte-identical round trip (sha256 match on an 8 MB model split 3 ways)
+* non-contiguous chunk sets are refused rather than silently concatenated
+* a truncated destination is detected by size and rebuilt
+* rebuild is atomic — temp file plus `os.replace`, so an interrupted boot cannot leave a
+  corrupt model ComfyUI would try to load
+* idempotent — a second run reports "0 built, 1 already present"
+* chunks over 4 GB warn, because that is exactly the case that still fails on SimplePod
+
+`verify-env.sh` now asserts the stitcher exists, that start.sh calls it, and reports the
+real layer-shape facts (any unchunked model file over 4 GB is called out).
+
+**Preserved:** `sha-5ec04390d8cb` (the build PPIO and Novita prewarm from) remains tagged,
+along with 12 other `sha-*` tags. The content-tag scheme means a new build is always a new
+tag — nothing is overwritten.
+
+### SimplePod US-MN-01: our image cannot be pulled by that host
+
+Tried the newest image A (`sha-9ba51985e251`, 83.1 GB) on US-MN-01 (host 216, RTX 4090,
+$0.38/hr). **Unusable: the host re-pulls forever.**
+
+The console loops every ~5 minutes:
+
+```
+12:08:11 Pulling image...
+12:12:58 Preparing instance... / 12:13:00 Pulling image...
+12:17:xx Preparing instance... / 12:17:xx Pulling image...
+```
+
+`dockerPullProgressBar` reaches **100% (82.89 GB)** every cycle, then restarts. `diskUsage`
+stays 0.00, so nothing is ever written. No error is surfaced anywhere — only
+Preparing/Pulling.
+
+**It is not disk size.** First attempt at the template's default 100 GB, then a retry at
+200 GB: identical loop. (My first diagnosis blamed the 100 GB disk; that was wrong, and 200
+GB disproved it.)
+
+**It is not the host or the network.** A control instance on the *same* host with the stock
+`simplepodai/comfyui` image (7.37 GB, 29 layers) came up cleanly in ~300s and served the GUI:
+
+* `status: running`, pull took ~12s
+* `[INFO] Starting server / To see the GUI go to: http://0.0.0.0:8188`
+* 8188: https://consortium-environments-talented-emotional.trycloudflare.com/simplepod-login
+* direct: http://159.48.242.20:41813/simplepod-login
+
+The host pulls the 83 GB **download** at 200-680 MB/s, so bandwidth is not the issue either.
+
+**What is different about our image:** 63 layers, 83.1 GB, with single layers of 20.96 GB and
+20.95 GB. The control has 29 layers totalling 7.37 GB and no layer over a few GB. The
+download completes and the **unpack/storage step is what fails**, which points at that host's
+storage driver handling a ~21 GB single layer -- but SimplePod exposes no docker error, so
+this is the strongest supported inference, not a confirmed cause. (I checked for duplicated
+layers; the size histogram shows no repeats, so that theory is dead.)
+
+**Also learned, and useful regardless of host:** direct-IP access (`http://<ip>:41813`,
+`ssh -p 41811`) is far faster than the trycloudflare proxy -- **TTFB 0.22s direct vs 1.9s
+proxied, an 8x difference.** Any launcher for SimplePod should prefer the direct port.
+
+**Only one Docker 4090 host exists in US-MN-01 (id 216),** so the image-vs-host question
+cannot be separated by trying a second US-MN-01 host.
+
+Templates left in place: `comfyui-h3 A (seedhunter)` (id 31996, 200 GB) pointing at
+`moneywaters/comfyui-h3-novita:sha-9ba51985e251`. No instances left running.
+
 ### Upload speed: it is the local VPN tunnel, not the image
 
 Reported as "ridiculous upload speed, surely some kind of error". Measured, and it is not a

@@ -227,6 +227,44 @@ else
     echo "  BAD bulk_io web extension missing"; FAIL=$((FAIL+1))
 fi
 
+
+echo "=== simplepod layering / chunked weights ==="
+# SimplePod hosts will not unpack a ~21 GB layer (their console loops "Pulling image"
+# forever while diskUsage stays 0.00). Models above the threshold must therefore ship as
+# chunks, and the stitcher must be present to put them back.
+if [ -x /opt/stitch-models.sh ] && [ -f /opt/stitch-models.py ]; then
+    echo "  OK  stitcher present"
+else
+    echo "  BAD stitcher missing -- chunked weights would never be reassembled"; FAIL=$((FAIL+1))
+fi
+if grep -q 'stitch-models.sh' /opt/start.sh 2>/dev/null; then
+    echo "  OK  start.sh reassembles chunked weights at boot"
+else
+    echo "  BAD start.sh does not reassemble chunked weights"; FAIL=$((FAIL+1))
+fi
+
+# Report the real layer-shape facts the build produced: any model file still present at
+# over ~4 GB means chunking was skipped, which is the exact condition that fails on
+# SimplePod. Printed as a warning rather than a hard failure because PPIO and Novita
+# serve this image fine either way.
+BIG=$(find /opt/ComfyUI/models -maxdepth 2 -type f \( -name '*.safetensors' -o -name '*.gguf' \) \
+        -size +4G 2>/dev/null | head -20)
+if [ -n "$BIG" ]; then
+    echo "  WARN unchunked model file(s) over 4 GB (SimplePod may refuse to unpack):"
+    echo "$BIG" | while read -r f; do printf '        %s\n' "$(basename "$f")"; done
+else
+    echo "  OK  no model file over 4 GB (SimplePod-safe layer shape)"
+fi
+CHUNKS=$(find /opt/ComfyUI/models -maxdepth 2 -type f -name '*.part[0-9][0-9][0-9]' 2>/dev/null | wc -l | tr -d ' ')
+echo "  chunk files present: $CHUNKS"
+if [ "$CHUNKS" -gt 0 ]; then
+    if python3 /opt/stitch-models.py --models-dir /opt/ComfyUI/models --all --list 2>/dev/null | grep -q missing; then
+        echo "  OK  at least one model needs stitching at boot (lazy path exercised)"
+    else
+        echo "  OK  all chunked models already stitched"
+    fi
+fi
+
 echo "=== sshd ==="
 test -x /usr/sbin/sshd && echo "  OK sshd present" || { echo "  BAD sshd missing"; FAIL=$((FAIL+1)); }
 
