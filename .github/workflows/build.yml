@@ -129,16 +129,30 @@ jobs:
           install -m 600 /dev/null /tmp/hf_token
           printf '%s' "${{ secrets.HF_TOKEN }}" > /tmp/hf_token
 
+      # One RUN per chunk. Docker creates a layer per RUN instruction, not per file, so
+      # splitting inside a single RUN leaves one 20.96 GB layer -- which is exactly what
+      # the first attempt did and why SimplePod still looped.
+      - name: Generate the chunked Dockerfile
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_TOKEN_FILE: /tmp/hf_token
+        run: |
+          set -euo pipefail
+          python3 ops/gen-chunk-dockerfile.py \
+            --part "${{ matrix.part }}" \
+            --chunk-mb "${{ env.MODEL_CHUNK_MB }}" \
+            --out Dockerfile.gen
+          echo "### RUN instructions: $(grep -c '^RUN' Dockerfile.gen)"
+          grep -E '^FROM|^COPY|^RUN' Dockerfile.gen | head -8
+
       - name: Build this part
         run: |
           set -euo pipefail
           IMAGE="docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}"
           podman build --format docker \
             --secret id=hf_token,src=/tmp/hf_token \
-            --build-arg PART="${{ matrix.part }}" \
-            --build-arg MODEL_CHUNK_MB="${{ env.MODEL_CHUNK_MB }}" \
             -t "${IMAGE}:part-${{ matrix.part }}" \
-            -f Dockerfile.models .
+            -f Dockerfile.gen .
           podman image inspect "${IMAGE}:part-${{ matrix.part }}" --format 'size {{.Size}} bytes'
           df -h /
 
@@ -196,6 +210,7 @@ jobs:
       - name: Compose the chunked variant
         env:
           DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
         run: |
           set -euo pipefail
           prefix() { local out=""; for p in $(echo "$1" | tr ',' ' '); do out="${out}${out:+,}part-${p}"; done; echo "$out"; }

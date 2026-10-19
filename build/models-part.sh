@@ -28,38 +28,6 @@ fetch() {  # <subdir> <filename> <url> <min-bytes>
         if [ "$have" -ge "$minbytes" ]; then echo "  OK exists $subdir/$name"; return 0; fi
         rm -f "$dest"
     fi
-    # Optional streaming split. Docker layers are immutable and additive: downloading a
-    # 20 GB file and deleting it in a later RUN still ships the 20 GB blob. The only way to
-    # avoid a fat layer is to never materialise the file, so pipe curl straight into split.
-    # SimplePod loops forever on layers of 20 / 15 / 7 GB while its 3.16 GB largest layer
-    # pulls fine, so 2 GB chunks stay well clear.
-    if [ -n "${MODEL_CHUNK_MB:-}" ] && [ "$minbytes" -gt $(( MODEL_CHUNK_MB * 1000000 )) ]; then
-        echo "  GET $subdir/$name  (streaming into ${MODEL_CHUNK_MB} MB chunks)"
-        rm -f "$dest".part[0-9][0-9][0-9]
-        local attempt=1 got=0
-        while [ "$attempt" -le 4 ]; do
-            if "$CURL" --fail --location --silent --show-error \
-                    --retry 8 --retry-delay 5 --retry-all-errors \
-                    --connect-timeout 30 --max-time 3600 \
-                    -H "Authorization: Bearer ${HF}" "$url" \
-                 | split -b $(( MODEL_CHUNK_MB * 1048576 )) -d -a 3 - "$dest.part"; then
-                got=$(cat "$dest".part[0-9][0-9][0-9] 2>/dev/null | wc -c | tr -d ' ')
-                if [ "${got:-0}" -ge "$minbytes" ]; then
-                    local nch; nch=$(ls "$dest".part[0-9][0-9][0-9] 2>/dev/null | wc -l | tr -d ' ')
-                    echo "  OK $subdir/$name ($((got/1048576)) MB in $nch chunks, attempt $attempt)"
-                    return 0
-                fi
-                echo "  retry $attempt: only $((got/1048576)) MB of >= $((minbytes/1048576)) MB"
-            else
-                echo "  retry $attempt: transfer failed mid-stream"
-            fi
-            rm -f "$dest".part[0-9][0-9][0-9]
-            attempt=$((attempt+1)); sleep $((attempt * 5))
-        done
-        echo "  WARN chunked download failed $name after retries"
-        FAILED=$((FAILED+1)); return 1
-    fi
-
     echo "  GET $subdir/$name"
     # Outer attempt loop with RESUME. curl's own --retry gives up on a CDN redirect that
     # stalls mid-body, which is what killed the h3vae-kijai fetch: the file exists and
@@ -100,6 +68,14 @@ T8VG=https://huggingface.co/t8star/Qwen-Image-2.1-viggle-turbo-4step-r64-comfy/r
 T8PR=https://huggingface.co/t8star/Pruna-Qwen-Image-2.1-Comfy/resolve/main
 
 echo "=== PART=$PART ==="
+# Plan mode: print what this part would fetch, one line per file, and exit.
+# ops/gen-chunk-dockerfile.py uses it to learn the URL list before deciding how many
+# RUNs (and therefore how many layers) each model has to be split across. It has to sit
+# AFTER fetch() is defined or the real definition overwrites it, and BEFORE the dispatch.
+if [ "${MODELS_PLAN:-0}" = "1" ]; then
+    fetch() { printf "%s|%s|%s|%s\n" "$1" "$2" "$3" "${4:-1000000}"; return 0; }
+fi
+
 case "$PART" in
 
   # ---------------- image A: MiniMax H3 video generation ---------------------
@@ -185,3 +161,40 @@ esac
 echo "=== $PART tree ==="; du -sh "$M"/* 2>/dev/null | sort -rh | head
 if [ "$FAILED" -gt 0 ]; then echo "ERROR: $FAILED download(s) failed"; exit 1; fi
 echo "=== PART $PART complete ==="
+
+# ---------------------------------------------------------------- range mode
+# One chunk, one RUN, one docker layer. This is the ONLY way to get a small layer:
+# a single RUN that writes 11 chunk files is still one layer of their total size,
+# which is exactly what the first attempt at this got wrong (compose reported
+# "+5 layer(s), +20.96 GB" -- unchanged from the unsplit build).
+if [ -n "${MODELS_RANGE_START:-}" ]; then
+    R_SUBDIR="${MODELS_RANGE_SUBDIR:?}"
+    R_NAME="${MODELS_RANGE_NAME:?}"
+    R_URL="${MODELS_RANGE_URL:?}"
+    R_START="${MODELS_RANGE_START}"
+    R_END="${MODELS_RANGE_END:?}"
+    R_IDX="${MODELS_RANGE_IDX:?}"
+    R_DEST="$M/$R_SUBDIR/$R_NAME.part$R_IDX"
+    mkdir -p "$M/$R_SUBDIR"
+    echo "  RANGE $R_SUBDIR/$R_NAME [$R_START-$R_END] -> part$R_IDX"
+    attempt=1
+    while [ "$attempt" -le 5 ]; do
+        "$CURL" --fail --location --silent --show-error \
+            --retry 5 --retry-delay 5 --retry-all-errors \
+            --connect-timeout 30 --max-time 3600 \
+            -r "${R_START}-${R_END}" \
+            -H "Authorization: Bearer ${HF}" "$R_URL" > "$R_DEST.tmp"
+        got=$(stat -c%s "$R_DEST.tmp" 2>/dev/null || echo 0)
+        want=$(( R_END - R_START + 1 ))
+        if [ "$got" -eq "$want" ]; then
+            mv "$R_DEST.tmp" "$R_DEST"
+            echo "  OK part$R_IDX ($((got/1048576)) MB, attempt $attempt)"
+            exit 0
+        fi
+        echo "  retry $attempt: got $((got/1048576)) MB, wanted $((want/1048576)) MB"
+        rm -f "$R_DEST.tmp"
+        attempt=$((attempt+1)); sleep $((attempt * 5))
+    done
+    echo "  ERROR range failed for $R_NAME part$R_IDX"
+    exit 1
+fi

@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Emit a Dockerfile that stores each weight file as a series of small layers.
+
+WHY THIS EXISTS
+---------------
+SimplePod's unpacker loops forever on this image's weight layers: the console repeats
+"Preparing instance / Pulling image" every ~4 minutes, the progress bar reaches 100% each
+cycle, diskUsage stays 0.00 and the container never starts. Confirmed on two hosts (216
+RTX 4090, 161 RTX 3090) and two disk sizes (100 GB, 200 GB), while a 7 GB control image
+booted on those same hosts in ~300 s. PPIO and Novita pull the same image without trouble.
+
+    code-only  38 layers,  7.1 GB, largest  3.16 GB  -> pulls in ~90 s
+    :models    73 layers, 77.9 GB, largest 20.96 GB -> loops forever
+
+THE MISTAKE THIS REPLACES
+-------------------------
+The first attempt split the files inside the existing download RUN:
+
+    RUN curl ... | split -b 2048m -d -a 3 - /models/x.part
+
+That produced eleven 2 GB chunk files in ONE directory -- and one docker layer containing
+all of them, still 20.96 GB. Docker creates one layer per RUN/COPY *instruction*, not one
+per file, so how many files a RUN writes makes no difference to the layer's size. The build
+proved it: compose reported "+5 layer(s), +20.96 GB", identical to the unsplit build.
+
+THE FIX
+-------
+Each chunk needs its own RUN instruction, and each RUN fetches only its own byte range:
+
+    RUN curl -r 0-2147483647            ... > /models/x.part000   <- layer, ~2 GB
+    RUN curl -r 2147483648-4294967295   ... > /models/x.part001   <- layer, ~2 GB
+
+That needs the exact file size up front, which a 1-byte Range probe returns as
+`Content-Range: bytes 0-0/<total>`. Chunks are then concatenated at boot by
+build/stitch-models.py, which is already byte-exact and idempotent.
+
+Usage:
+    gen-chunk-dockerfile.py --part h3-fl2va --chunk-mb 2048 --out Dockerfile.gen
+"""
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+import urllib.request
+
+BASE = "nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04"
+CHUNK_SUFFIX_WIDTH = 3
+
+
+def plan(part, repo_root):
+    """Ask models-part.sh what this part wants, without downloading anything."""
+    env = dict(os.environ)
+    env.update({"PART": part, "MODELS_PLAN": "1", "COMFYUI_PATH": "/tmp/plan"})
+    out = subprocess.run(
+        ["bash", os.path.join(repo_root, "build", "models-part.sh")],
+        capture_output=True, text=True, env=env, timeout=300,
+    )
+    if out.returncode != 0:
+        sys.exit("plan failed for %s:\n%s\n%s" % (part, out.stdout, out.stderr))
+
+    files = []
+    for line in out.stdout.splitlines():
+        if line.count("|") != 3:
+            continue
+        subdir, name, url, minbytes = line.split("|")
+        if not url.startswith("http"):
+            continue
+        files.append((subdir, name, url, int(minbytes)))
+    if not files:
+        sys.exit("plan produced no files for %s" % part)
+    return files
+
+
+def size_of(url, token):
+    """Exact byte length, via a 1-byte Range probe (Content-Range: bytes 0-0/<total>)."""
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer %s" % token})
+    req.add_header("Range", "bytes=0-0")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            cr = r.headers.get("Content-Range") or ""
+            m = re.search(r"/(\d+)\s*$", cr)
+            if m:
+                return int(m.group(1))
+            cl = r.headers.get("Content-Length")
+            if cl:
+                return int(cl)
+    except Exception as e:
+        sys.exit("cannot size %s (%s) -- a wrong size here would corrupt the model" % (url, e))
+    sys.exit("no size for %s (server gave no Content-Range)" % url)
+
+
+def run_range(subdir, name, url, start, end, idx):
+    return (
+        "RUN --mount=type=secret,id=hf_token,required=false bash -c '"
+        'export HF_TOKEN="${HF_TOKEN:-$(cat /run/secrets/hf_token 2>/dev/null || true)}"; '
+        "MODELS_RANGE_SUBDIR=%(subdir)s MODELS_RANGE_NAME=%(name)s "
+        "MODELS_RANGE_URL=%(url)s MODELS_RANGE_START=%(start)d MODELS_RANGE_END=%(end)d "
+        "MODELS_RANGE_IDX=%(idx)s bash /opt/models-part.sh'"
+        % {"subdir": subdir, "name": name, "url": url, "start": start, "end": end, "idx": idx}
+    )
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--part", required=True)
+    ap.add_argument("--chunk-mb", type=int, default=2048)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--repo-root", default=".")
+    args = ap.parse_args()
+
+    token = os.environ.get("HF_TOKEN") or ""
+    if not token:
+        sys.exit("HF_TOKEN is required: the size probe needs to authenticate")
+    token_file = os.environ.get("HF_TOKEN_FILE")
+    if token_file and os.path.exists(token_file):
+        token = open(token_file).read().strip()
+
+    chunk = args.chunk_mb * 1024 * 1024
+    files = plan(args.part, args.repo_root)
+
+    lines = [
+        "# GENERATED by ops/gen-chunk-dockerfile.py -- do not edit.",
+        "# One RUN per chunk, so each chunk is its own docker layer and no layer is large.",
+        "FROM %s" % BASE,
+        "ARG DEBIAN_FRONTEND=noninteractive",
+        "",
+        "RUN apt-get update \\",
+        "    && apt-get install -y --no-install-recommends curl ca-certificates \\",
+        "    && rm -rf /var/lib/apt/lists/*",
+        "",
+        "COPY build/models-part.sh /opt/models-part.sh",
+        "RUN chmod +x /opt/models-part.sh",
+        "",
+    ]
+
+    total = 0
+    n_runs = 0
+    for subdir, name, url, minbytes in files:
+        size = size_of(url, token)
+        if size < minbytes:
+            sys.exit(
+                "%s is %d bytes but the plan expected at least %d -- refusing to split a "
+                "truncated model" % (name, size, minbytes)
+            )
+        total += size
+        nchunks = max(1, (size + chunk - 1) // chunk)
+        print("  %-58s %6.2f GB -> %2d chunk(s)" % (name[:58], size / 1e9, nchunks))
+        for i in range(nchunks):
+            start = i * chunk
+            end = min(start + chunk, size) - 1
+            lines.append("# %s chunk %d/%d" % (name, i + 1, nchunks))
+            lines.append(run_range(subdir, name, url, start, end, str(i).zfill(CHUNK_SUFFIX_WIDTH)))
+            lines.append("")
+            n_runs += 1
+
+    lines += [
+        "RUN du -sh /opt/ComfyUI/models/* 2>/dev/null | sort -rh | head -6 || true",
+        "",
+    ]
+
+    open(args.out, "w").write("\n".join(lines))
+    # Every chunk is at most `chunk` bytes, so the largest layer a part can contribute is
+    # min(chunk, total) -- the last chunk is the only one that can be shorter.
+    print(
+        "  wrote %s: %d RUN(s), %.1f GB total, largest layer <= %.2f GB"
+        % (args.out, n_runs, total / 1e9, min(chunk, total) / 1e9)
+    )
+
+
+if __name__ == "__main__":
+    main()
