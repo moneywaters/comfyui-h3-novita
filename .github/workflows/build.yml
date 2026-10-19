@@ -220,7 +220,7 @@ jobs:
             echo "### composing ${REPO}:models-chunked"
             python3 ops/compose-image.py --repo "${DOCKER_USER}/${REPO}" \
               --parts-repo "${DOCKER_USER}/${{ env.IMAGE_A }}" \
-              --env part-env --parts "$(prefix "$PARTS")" --out models-chunked --no-latest
+              --env latest --parts "$(prefix "$PARTS")" --out models-chunked --no-latest
           done
 
       # The whole point of this build: prove no layer is large enough to break SimplePod.
