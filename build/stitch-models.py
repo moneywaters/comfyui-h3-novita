@@ -42,7 +42,12 @@ CHUNK_RE = re.compile(r"^(?P<stem>.+)\.part(?P<idx>\d+)$")
 # Directories walked by default when start.sh calls this without --dirs. The two
 # 20 GB diffusion models are the ones that broke SimplePod, and they are the ones a
 # user reaches for first, so they get stitched eagerly at boot.
-DEFAULT_DIRS = ("diffusion_models",)
+# No directory filter by default. Everything the image ships as chunks has to be whole
+# before ComfyUI scans, or the workflow silently loses its VAE and text encoder -- that is
+# exactly what happened on instance 176848, where only diffusion_models were stitched and
+# VAELoader offered nothing but "pixel_space" while CLIPLoader offered no choices at all.
+# Stitching stays cheap for images with no chunks: the walk finds nothing and exits.
+DEFAULT_DIRS = ("",)
 # A chunk larger than this means something rebuilt the image without chunking; warn
 # because that is exactly the case that fails on SimplePod.
 WARN_CHUNK_BYTES = 4 * 1024**3
