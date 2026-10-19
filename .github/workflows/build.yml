@@ -143,7 +143,9 @@ jobs:
             --chunk-mb "${{ env.MODEL_CHUNK_MB }}" \
             --out Dockerfile.gen
           echo "### RUN instructions: $(grep -c '^RUN' Dockerfile.gen)"
-          grep -E '^FROM|^COPY|^RUN' Dockerfile.gen | head -8
+          # `| head` closes the pipe early, so grep dies of SIGPIPE and, under pipefail,
+          # fails the step even though the generator succeeded. Purely cosmetic output.
+          grep -E '^FROM|^COPY|^RUN' Dockerfile.gen | head -8 || true
 
       - name: Build this part
         run: |
