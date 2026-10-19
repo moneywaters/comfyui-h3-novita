@@ -47,6 +47,7 @@ env:
   # PARTS is for the compose step; the matrix above lists the same parts inline,
   # because GitHub Actions does not allow env.* inside a matrix expression.
   PARTS: h3-fl2va,h3-singularity,h3enc,h3vae-kijai,h3vae-audio,h3loras,h3extra,seedvr2
+  PARTS_LEAN: h3-fl2va,h3-singularity,h3enc,h3vae-kijai,h3vae-audio,h3loras,h3extra
 
 jobs:
   # ---------------------------------------------------------------- code-only variant
@@ -226,14 +227,52 @@ jobs:
       # The whole point of this build: prove no layer is large enough to break SimplePod.
       # If chunking silently failed the 20 GB layer is still there, and this fails the job
       # rather than shipping an image that loops forever.
+      # A lean variant for hosts that cannot hold the full image.
+      #
+      # SimplePod's 170HX hosts (host 207, "170HX Unlocked") stall a pull at ~75.55 GB
+      # and then a ~5 minute watchdog restarts it, forever. Measured, not guessed:
+      #   - always ~75.55 GB, within 60 MB across five attempts, inside layer 110
+      #   - identical at 200 GB and 500 GB disk (diskSize DOES size the overlay --
+      #     a 500 GB request shows "overlay 500G" inside the container)
+      #   - all 114 blobs return 200 and their Content-Lengths match the manifest
+      #   - the same 77.9 GB image pulls and runs on the RTX 5060 Ti host
+      #   - the 7 GB code-only image pulls there in ~11 s
+      #   - repeated failures eventually wedge the host: a fresh container on it could
+      #     no longer pull even the 7 GB image
+      # So the ceiling is the host's image storage, and the image has to fit under it.
+      #
+      # Dropping seedvr2 takes 77.9 GB to ~70.6 GB, leaving ~5 GB of headroom. The GPU
+      # itself is fine there: torch reports the CMP 170HX with 68.1 GB VRAM, capability 8.0.
+      - name: Compose the lean variant
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
+        run: |
+          set -euo pipefail
+          prefix() { local out=""; for p in $(echo "$1" | tr ',' ' '); do out="${out}${out:+,}part-${p}"; done; echo "$out"; }
+          for REPO in "${{ env.IMAGE_A }}" "${{ env.IMAGE_B }}"; do
+            echo "### composing ${REPO}:models-lean (no seedvr2)"
+            python3 ops/compose-image.py --repo "${DOCKER_USER}/${REPO}" \
+              --parts-repo "${DOCKER_USER}/${{ env.IMAGE_A }}" \
+              --env latest --parts "$(prefix "${{ env.PARTS_LEAN }}")" \
+              --out models-lean --no-latest
+          done
+
       - name: Assert no oversized layer
         env:
           DOCKER_USER: ${{ secrets.DOCKER_USER }}
         run: |
           set -euo pipefail
-          LIMIT_BYTES=4294967296 python3 ops/assert-layers.py \
+          # models-lean must also stay under the ~75.5 GB wall measured on the 170HX
+          # hosts, so this asserts the total, not just the largest layer.
+          LIMIT_BYTES=4294967296 MAX_TOTAL_BYTES=74000000000 \
+            python3 ops/assert-layers.py \
             "${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:models-chunked" \
             "${{ secrets.DOCKER_USER }}/${{ env.IMAGE_B }}:models-chunked"
+          LIMIT_BYTES=4294967296 MAX_TOTAL_BYTES=74000000000 \
+            python3 ops/assert-layers.py \
+            "${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:models-lean" \
+            "${{ secrets.DOCKER_USER }}/${{ env.IMAGE_B }}:models-lean"
 
       - name: Report the content tags
         env:

@@ -30,6 +30,10 @@ import sys
 import urllib.request
 
 LIMIT = int(os.environ.get("LIMIT_BYTES", 4 * 1024**3))
+# Optional ceiling on the whole image. SimplePod's 170HX hosts stall a pull at ~75.55 GB
+# (host 207: consistent within 60 MB across five attempts, at both 200 GB and 500 GB disk,
+# with every blob verified complete). A tag built for those hosts has to stay under it.
+MAX_TOTAL = int(os.environ["MAX_TOTAL_BYTES"]) if os.environ.get("MAX_TOTAL_BYTES") else None
 HUB = "https://hub.docker.com/v2/repositories/{repo}/tags/{tag}/images"
 
 
@@ -73,6 +77,15 @@ def main(refs):
             "  %-52s %3d layers  %6.1f GB  largest %5.2f GB"
             % (ref, len(sizes), sum(sizes) / 1e9, max(sizes) / 1e9)
         )
+        if MAX_TOTAL is not None and sum(sizes) > MAX_TOTAL:
+            print(
+                "  ERROR %s totals %.2f GB, over the %.2f GB ceiling this tag is built for."
+                % (ref, sum(sizes) / 1e9, MAX_TOTAL / 1e9)
+            )
+            print("        Hosts that cap around 75.5 GB will loop on this forever. Drop a")
+            print("        part from PARTS in build.yml rather than raising the limit.")
+            ok = False
+
         if big:
             print(
                 "  ERROR %s has %d layer(s) over %.1f GB: %s"
