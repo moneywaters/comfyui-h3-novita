@@ -12,7 +12,13 @@
 set -uo pipefail
 
 M="${COMFYUI_PATH:-/opt/ComfyUI}/models"
-PART="${PART:?PART must be set}"
+# Range mode is instructed entirely by env vars, so it does not need PART; the dispatch
+# path below does.
+if [ -z "${MODELS_RANGE_START:-}" ]; then
+    PART="${PART:?PART must be set}"
+else
+    PART="${PART:-range}"
+fi
 HF="${HF_TOKEN:-}"
 CURL=/usr/bin/curl
 FAILED=0
@@ -74,6 +80,43 @@ echo "=== PART=$PART ==="
 # AFTER fetch() is defined or the real definition overwrites it, and BEFORE the dispatch.
 if [ "${MODELS_PLAN:-0}" = "1" ]; then
     fetch() { printf "%s|%s|%s|%s\n" "$1" "$2" "$3" "${4:-1000000}"; return 0; }
+fi
+
+# ---------------------------------------------------------------- range mode
+# One chunk, one RUN, one docker layer. This is the ONLY way to get a small layer:
+# a single RUN that writes 11 chunk files is still one layer of their total size,
+# which is exactly what the first attempt at this got wrong (compose reported
+# "+5 layer(s), +20.96 GB" -- unchanged from the unsplit build).
+if [ -n "${MODELS_RANGE_START:-}" ]; then
+    R_SUBDIR="${MODELS_RANGE_SUBDIR:?}"
+    R_NAME="${MODELS_RANGE_NAME:?}"
+    R_URL="${MODELS_RANGE_URL:?}"
+    R_START="${MODELS_RANGE_START}"
+    R_END="${MODELS_RANGE_END:?}"
+    R_IDX="${MODELS_RANGE_IDX:?}"
+    R_DEST="$M/$R_SUBDIR/$R_NAME.part$R_IDX"
+    mkdir -p "$M/$R_SUBDIR"
+    echo "  RANGE $R_SUBDIR/$R_NAME [$R_START-$R_END] -> part$R_IDX"
+    attempt=1
+    while [ "$attempt" -le 5 ]; do
+        "$CURL" --fail --location --silent --show-error \
+            --retry 5 --retry-delay 5 --retry-all-errors \
+            --connect-timeout 30 --max-time 3600 \
+            -r "${R_START}-${R_END}" \
+            -H "Authorization: Bearer ${HF}" "$R_URL" > "$R_DEST.tmp"
+        got=$(stat -c%s "$R_DEST.tmp" 2>/dev/null || echo 0)
+        want=$(( R_END - R_START + 1 ))
+        if [ "$got" -eq "$want" ]; then
+            mv "$R_DEST.tmp" "$R_DEST"
+            echo "  OK part$R_IDX ($((got/1048576)) MB, attempt $attempt)"
+            exit 0
+        fi
+        echo "  retry $attempt: got $((got/1048576)) MB, wanted $((want/1048576)) MB"
+        rm -f "$R_DEST.tmp"
+        attempt=$((attempt+1)); sleep $((attempt * 5))
+    done
+    echo "  ERROR range failed for $R_NAME part$R_IDX"
+    exit 1
 fi
 
 case "$PART" in
@@ -161,40 +204,3 @@ esac
 echo "=== $PART tree ==="; du -sh "$M"/* 2>/dev/null | sort -rh | head
 if [ "$FAILED" -gt 0 ]; then echo "ERROR: $FAILED download(s) failed"; exit 1; fi
 echo "=== PART $PART complete ==="
-
-# ---------------------------------------------------------------- range mode
-# One chunk, one RUN, one docker layer. This is the ONLY way to get a small layer:
-# a single RUN that writes 11 chunk files is still one layer of their total size,
-# which is exactly what the first attempt at this got wrong (compose reported
-# "+5 layer(s), +20.96 GB" -- unchanged from the unsplit build).
-if [ -n "${MODELS_RANGE_START:-}" ]; then
-    R_SUBDIR="${MODELS_RANGE_SUBDIR:?}"
-    R_NAME="${MODELS_RANGE_NAME:?}"
-    R_URL="${MODELS_RANGE_URL:?}"
-    R_START="${MODELS_RANGE_START}"
-    R_END="${MODELS_RANGE_END:?}"
-    R_IDX="${MODELS_RANGE_IDX:?}"
-    R_DEST="$M/$R_SUBDIR/$R_NAME.part$R_IDX"
-    mkdir -p "$M/$R_SUBDIR"
-    echo "  RANGE $R_SUBDIR/$R_NAME [$R_START-$R_END] -> part$R_IDX"
-    attempt=1
-    while [ "$attempt" -le 5 ]; do
-        "$CURL" --fail --location --silent --show-error \
-            --retry 5 --retry-delay 5 --retry-all-errors \
-            --connect-timeout 30 --max-time 3600 \
-            -r "${R_START}-${R_END}" \
-            -H "Authorization: Bearer ${HF}" "$R_URL" > "$R_DEST.tmp"
-        got=$(stat -c%s "$R_DEST.tmp" 2>/dev/null || echo 0)
-        want=$(( R_END - R_START + 1 ))
-        if [ "$got" -eq "$want" ]; then
-            mv "$R_DEST.tmp" "$R_DEST"
-            echo "  OK part$R_IDX ($((got/1048576)) MB, attempt $attempt)"
-            exit 0
-        fi
-        echo "  retry $attempt: got $((got/1048576)) MB, wanted $((want/1048576)) MB"
-        rm -f "$R_DEST.tmp"
-        attempt=$((attempt+1)); sleep $((attempt * 5))
-    done
-    echo "  ERROR range failed for $R_NAME part$R_IDX"
-    exit 1
-fi
