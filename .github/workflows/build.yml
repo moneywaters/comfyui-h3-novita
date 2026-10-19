@@ -263,12 +263,13 @@ jobs:
           DOCKER_USER: ${{ secrets.DOCKER_USER }}
         run: |
           set -euo pipefail
-          # models-lean must also stay under the ~75.5 GB wall measured on the 170HX
-          # hosts, so this asserts the total, not just the largest layer.
-          LIMIT_BYTES=4294967296 MAX_TOTAL_BYTES=74000000000 \
-            python3 ops/assert-layers.py \
+          # :models-chunked keeps the full weight set, so only its LAYER sizes matter.
+          LIMIT_BYTES=4294967296 python3 ops/assert-layers.py \
             "${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:models-chunked" \
             "${{ secrets.DOCKER_USER }}/${{ env.IMAGE_B }}:models-chunked"
+          # :models-lean exists for hosts that cap around 75.5 GB, so its TOTAL matters
+          # as well as its largest layer. Shipping a perfectly chunked image that still
+          # cannot be pulled would defeat the point of the tag.
           LIMIT_BYTES=4294967296 MAX_TOTAL_BYTES=74000000000 \
             python3 ops/assert-layers.py \
             "${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:models-lean" \
