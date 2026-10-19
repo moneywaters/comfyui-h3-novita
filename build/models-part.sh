@@ -28,6 +28,38 @@ fetch() {  # <subdir> <filename> <url> <min-bytes>
         if [ "$have" -ge "$minbytes" ]; then echo "  OK exists $subdir/$name"; return 0; fi
         rm -f "$dest"
     fi
+    # Optional streaming split. Docker layers are immutable and additive: downloading a
+    # 20 GB file and deleting it in a later RUN still ships the 20 GB blob. The only way to
+    # avoid a fat layer is to never materialise the file, so pipe curl straight into split.
+    # SimplePod loops forever on layers of 20 / 15 / 7 GB while its 3.16 GB largest layer
+    # pulls fine, so 2 GB chunks stay well clear.
+    if [ -n "${MODEL_CHUNK_MB:-}" ] && [ "$minbytes" -gt $(( MODEL_CHUNK_MB * 1000000 )) ]; then
+        echo "  GET $subdir/$name  (streaming into ${MODEL_CHUNK_MB} MB chunks)"
+        rm -f "$dest".part[0-9][0-9][0-9]
+        local attempt=1 got=0
+        while [ "$attempt" -le 4 ]; do
+            if "$CURL" --fail --location --silent --show-error \
+                    --retry 8 --retry-delay 5 --retry-all-errors \
+                    --connect-timeout 30 --max-time 3600 \
+                    -H "Authorization: Bearer ${HF}" "$url" \
+                 | split -b $(( MODEL_CHUNK_MB * 1048576 )) -d -a 3 - "$dest.part"; then
+                got=$(cat "$dest".part[0-9][0-9][0-9] 2>/dev/null | wc -c | tr -d ' ')
+                if [ "${got:-0}" -ge "$minbytes" ]; then
+                    local nch; nch=$(ls "$dest".part[0-9][0-9][0-9] 2>/dev/null | wc -l | tr -d ' ')
+                    echo "  OK $subdir/$name ($((got/1048576)) MB in $nch chunks, attempt $attempt)"
+                    return 0
+                fi
+                echo "  retry $attempt: only $((got/1048576)) MB of >= $((minbytes/1048576)) MB"
+            else
+                echo "  retry $attempt: transfer failed mid-stream"
+            fi
+            rm -f "$dest".part[0-9][0-9][0-9]
+            attempt=$((attempt+1)); sleep $((attempt * 5))
+        done
+        echo "  WARN chunked download failed $name after retries"
+        FAILED=$((FAILED+1)); return 1
+    fi
+
     echo "  GET $subdir/$name"
     # Outer attempt loop with RESUME. curl's own --retry gives up on a CDN redirect that
     # stalls mid-body, which is what killed the h3vae-kijai fetch: the file exists and

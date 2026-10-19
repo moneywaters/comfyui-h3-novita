@@ -24,6 +24,10 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG PART=h3-fl2va
 ARG HF_TOKEN=""
 ARG WITH_PE=0
+# Stream each model through `split` at build time so the 20 GB file never exists and the
+# layer holds only 2 GB chunks. Must be a BUILD-time flag: layers are immutable, so
+# chunking after the download would leave the fat blob in the image forever.
+ARG MODEL_CHUNK_MB=2048
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
@@ -36,7 +40,7 @@ RUN chmod +x /opt/models-part.sh
 # One part per image, so this layer is one model (3-20 GB) and commits reliably.
 RUN --mount=type=secret,id=hf_token,required=false \
     export HF_TOKEN="${HF_TOKEN:-$(cat /run/secrets/hf_token 2>/dev/null || true)}" \
-    && PART="${PART}" WITH_PE="${WITH_PE}" bash /opt/models-part.sh
+    && PART="${PART}" WITH_PE="${WITH_PE}" MODEL_CHUNK_MB="${MODEL_CHUNK_MB}" bash /opt/models-part.sh
 
 # Report what landed, so the build log shows the layer contents without a shell.
 RUN du -sh /opt/ComfyUI/models/* 2>/dev/null | sort -rh | head -6 || true

@@ -40,6 +40,10 @@ permissions:
 env:
   IMAGE_A: comfyui-h3-novita
   IMAGE_B: comfyui-qwen-novita
+  # Weights are streamed through `split` at this size so no docker layer is
+  # large enough to break SimplePod. Its unpacker loops forever on the 20 GB
+  # layers the plain :models tag has, while a 3.16 GB layer pulls fine.
+  MODEL_CHUNK_MB: "2048"
   # PARTS is for the compose step; the matrix above lists the same parts inline,
   # because GitHub Actions does not allow env.* inside a matrix expression.
   PARTS: h3-fl2va,h3-singularity,h3enc,h3vae-kijai,h3vae-audio,h3loras,h3extra,seedvr2
@@ -132,6 +136,7 @@ jobs:
           podman build --format docker \
             --secret id=hf_token,src=/tmp/hf_token \
             --build-arg PART="${{ matrix.part }}" \
+            --build-arg MODEL_CHUNK_MB="${{ env.MODEL_CHUNK_MB }}" \
             -t "${IMAGE}:part-${{ matrix.part }}" \
             -f Dockerfile.models .
           podman image inspect "${IMAGE}:part-${{ matrix.part }}" --format 'size {{.Size}} bytes'
@@ -184,6 +189,34 @@ jobs:
           python3 ops/compose-image.py --repo "${DOCKER_USER}/${IMAGE_B}" \
             --parts-repo "${DOCKER_USER}/${IMAGE_A}" \
             --env part-env --parts "$(prefix "$PARTS")" --out models --no-latest
+
+      # The chunked variant. :models keeps the 20/15/7 GB weight layers for PPIO and
+      # Novita, which pull those fine; this tag has the same weights split into 2 GB
+      # pieces so SimplePod can unpack them at all. start.sh stitches them back at boot.
+      - name: Compose the chunked variant
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+        run: |
+          set -euo pipefail
+          prefix() { local out=""; for p in $(echo "$1" | tr ',' ' '); do out="${out}${out:+,}part-${p}"; done; echo "$out"; }
+          for REPO in "${{ env.IMAGE_A }}" "${{ env.IMAGE_B }}"; do
+            echo "### composing ${REPO}:models-chunked"
+            python3 ops/compose-image.py --repo "${DOCKER_USER}/${REPO}" \
+              --parts-repo "${DOCKER_USER}/${{ env.IMAGE_A }}" \
+              --env part-env --parts "$(prefix "$PARTS")" --out models-chunked --no-latest
+          done
+
+      # The whole point of this build: prove no layer is large enough to break SimplePod.
+      # If chunking silently failed the 20 GB layer is still there, and this fails the job
+      # rather than shipping an image that loops forever.
+      - name: Assert no oversized layer
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+        run: |
+          set -euo pipefail
+          LIMIT_BYTES=4294967296 python3 ops/assert-layers.py \
+            "${{ secrets.DOCKER_USER }}/${{ env.IMAGE_A }}:models-chunked" \
+            "${{ secrets.DOCKER_USER }}/${{ env.IMAGE_B }}:models-chunked"
 
       - name: Report the content tags
         env:

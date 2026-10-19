@@ -56,6 +56,19 @@ mkdir -p /var/log
 # anywhere. On a container restart they are already on disk and this is a no-op; on a
 # fresh instance it downloads them from Hugging Face. Runs before normalize-models,
 # which rewrites safetensors headers and needs whole files.
+# The chunked tag ships weights as <name>.safetensors.partNNN so no docker layer is
+# large enough to break SimplePod's unpacker. Rebuild them here, BEFORE models-source.sh
+# looks at the directory: that script decides baked-vs-download by finding real
+# .safetensors files, and chunk files do not look like weights, so without this it would
+# re-download everything that is already sitting in the image.
+if [ -x /opt/stitch-models.sh ]; then
+    log "stitching chunked weights"
+    # ALL, not just diffusion_models: the chunker splits every file over MODEL_CHUNK_MB,
+    # which includes the VAE (~6.5 GB) and any other large weight, and ComfyUI must see
+    # complete files when it scans. With no chunks present this is a no-op.
+    MODELS_REASSEMBLE_ALL=1 bash /opt/stitch-models.sh 2>&1 | sed 's/^/[stitch] /' ||         log "WARN: stitch-models failed"
+fi
+
 # Where do the weights come from? On PPIO and Novita the image holds them and this is a
 # no-op. On SimplePod the baked weights cannot be unpacked at all (their hosts loop on a
 # ~21 GB layer forever), so this fetches them from Hugging Face instead. The decision and
@@ -80,9 +93,15 @@ COMFY_PID=$!
 log "ComfyUI pid=$COMFY_PID  (log: /var/log/comfyui.log)"
 
 # ------------------------------------------------------------------ supervise
-wait -n "$SSHD_PID" "$COMFY_PID"
+# ComfyUI only. This used to be `wait -n "$SSHD_PID" "$COMFY_PID"`, which made sshd a
+# second owner of the container's lifetime -- and on SimplePod that is fatal: their
+# provisioning (/etc/simplepod/rriRunSshd.sh) reads /run/sshd.pid and kills whatever sshd
+# it finds so it can install and run its own. That killed OUR sshd, `wait -n` returned,
+# and the container tore itself down every ~20 seconds forever. A web app should not die
+# because a supervisor was replaced.
+wait "$COMFY_PID"
 rc=$?
-log "a service exited (rc=$rc) — shutting down container"
+log "ComfyUI exited (rc=$rc) — shutting down container"
 tail -n 40 /var/log/comfyui.log 2>/dev/null || true
-kill "$SSHD_PID" "$COMFY_PID" 2>/dev/null || true
+kill "$SSHD_PID" 2>/dev/null || true
 exit "$rc"
