@@ -768,6 +768,40 @@ Commands are now `menu` (default), `launch`, `clusters`, `products`, `prewarm-li
 
 
 
+
+### The two tags, and how they are built
+
+| tag | size | contents | who uses it |
+|---|---|---|---|
+| `:latest` / `:sha-<id>` | 7.1 GB | code only | **SimplePod** — its hosts loop forever on ~20 GB layers |
+| `:models` / `:sha-<id>-models` | 77.9 GB | weights baked in | **PPIO / Novita** — prewarmed, instant boots, no HF token |
+
+Both carry the same code, including `fetch-models-boot.sh`, which asks one question at boot:
+are the weights already on disk? Present → return. Absent → download. So no platform
+sniffing: the tag carries the trade-off and the image stays correct either way.
+
+**Build shape:** three jobs. `code-only` builds and owns `:latest`. `part` fans out across
+8 parallel runners, one model part each. `publish` composes those parts into `:models` at the
+registry for both repo names.
+
+**Why per-part:** baking all 8 parts into one image needs ~123 GB at peak on the build host
+(43 GB of weights + podman taring the layer it is committing + ~35 GB base) against 110 GB
+free, so it dies with `no space left on device` while committing — measured twice. Each part
+on its own runner means no runner ever holds more than one.
+
+**Two bugs found by building it:**
+
+1. `compose-image.py` always also published `:latest` unless `--out` was literally
+   `latest`. With `--out models` that silently overwrote the code-only tag with the 77.9 GB
+   image — which would have made SimplePod pull the exact image it cannot use. Fixed with
+   `--no-latest`; the two jobs now own one tag each.
+2. Publishing image B by copying the manifest between repos returns HTTP 400, because the
+   manifest references blobs only repo A can see and Docker Hub does not auto-mount them.
+   Composing image B from the same part images instead costs a few KB rather than 78 GB.
+
+**Content tag:** `sha-670608b7a4a0`, identical for both repo names, derived from the manifest
+digest so a prewarm on it can never serve stale layers.
+
 ### One codebase, two tags: weights baked for PPIO/Novita, code-only for SimplePod
 
 The image now answers a single question at boot — **are the weights already on disk?** —

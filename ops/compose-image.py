@@ -279,7 +279,13 @@ def compose(args):
     log(f"  content tag -> {content_tag} ({man_digest}) [{st}]")
     log(f"  USE FOR PREWARM/DEPLOY: {repo}:{content_tag}")
 
-    if args.out != "latest":
+    # Publishing :latest here is opt-out rather than opt-in. It used to be the right
+    # default when this image was the only one, but it is wrong now: the with-weights
+    # compose runs AFTER the code-only job and would clobber :latest, which must stay
+    # code-only for SimplePod -- its hosts cannot unpack our ~20 GB weight layers. The
+    # two tags are owned by two different jobs, so this must not touch :latest unless
+    # explicitly asked.
+    if args.out != "latest" and not args.no_latest:
         token = get_token(repo, "pull,push")
         request(f"{REG}/v2/{repo}/manifests/latest", token, method="PUT",
                 data=man_bytes, ctype=man_mt)
@@ -298,6 +304,8 @@ def main():
     ap.add_argument("--parts", required=True,
                     help="comma-separated part tags/digests, in layer order")
     ap.add_argument("--out", default="latest")
+    ap.add_argument("--no-latest", action="store_true",
+                    help="do not also publish :latest (the code-only job owns it)")
     ap.add_argument("--oci", action="store_true", help="force OCI media types")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()

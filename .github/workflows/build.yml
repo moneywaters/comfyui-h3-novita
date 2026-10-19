@@ -167,10 +167,13 @@ jobs:
 
           echo "### composing ${IMAGE_A}:models from part-* images"
           python3 ops/compose-image.py --repo "${DOCKER_USER}/${IMAGE_A}" \
-            --env part-env --parts "$(prefix "$PARTS")" --out models
+            --env part-env --parts "$(prefix "$PARTS")" --out models --no-latest
 
           # Image B is the same layers under a different name, because the PPIO and
           # Novita launchers ask for comfyui-qwen-novita when a Qwen run is wanted.
+          #
+          # --no-latest on both: the code-only job owns :latest, and the with-weights
+          # compose runs afterwards, so publishing :latest here would clobber it.
           #
           # Compose it the SAME way -- from the part images -- rather than pulling the
           # finished 78 GB image and re-pushing it. A pull needs 78 GB of local disk and
@@ -180,7 +183,7 @@ jobs:
           echo "### composing ${IMAGE_B}:models from the same part images"
           python3 ops/compose-image.py --repo "${DOCKER_USER}/${IMAGE_B}" \
             --parts-repo "${DOCKER_USER}/${IMAGE_A}" \
-            --env part-env --parts "$(prefix "$PARTS")" --out models
+            --env part-env --parts "$(prefix "$PARTS")" --out models --no-latest
 
       - name: Report the content tags
         env:
