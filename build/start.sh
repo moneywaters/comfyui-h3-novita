@@ -87,7 +87,16 @@ log "starting ComfyUI ($PY)"
 # --enable-compress-response-body matters a lot here: /object_info is 3.55 MB of JSON and
 # gzip takes it to 389 KB (9.1x). Over a remote host's proxy (~40 KB/s effective) that is
 # the difference between an 84s stall on the loading screen and ~9s.
-"$PY" main.py --listen 0.0.0.0 --port 8188 --preview-method auto \
+# SaladCloud's Container Gateway reaches the container over IPv6 only, and binds to one
+# port; binding 0.0.0.0 there makes the app unreachable (the gateway returns 5xx/timeouts
+# while the container looks healthy). Everywhere else still wants IPv4, so the bind address
+# is configurable and defaults to the old behaviour.
+LISTEN="${COMFYUI_LISTEN:-0.0.0.0}"
+PORT="${COMFYUI_PORT:-8188}"
+if [ "$LISTEN" != "0.0.0.0" ]; then
+    log "binding ComfyUI to [$LISTEN]:$PORT (IPv6/gateway mode)"
+fi
+"$PY" main.py --listen "$LISTEN" --port "$PORT" --preview-method auto \
     --enable-compress-response-body > /var/log/comfyui.log 2>&1 &
 COMFY_PID=$!
 log "ComfyUI pid=$COMFY_PID  (log: /var/log/comfyui.log)"
