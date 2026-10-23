@@ -1,0 +1,78 @@
+name: GHCR reachability test
+
+# Purpose: prove that a Chinese GPU host can pull from GHCR.
+#
+# Why this exists: suanjiayun.com (算家云) cannot pull our Docker Hub image at all.
+# Measured on their own platform, from the pull-failure tooltips:
+#
+#   registry-1.docker.io       -> "Client.Timeout exceeded while awaiting headers"   (blocked)
+#   docker.m.daocloud.io       -> "this image is not in the allowlist"
+#   xxx.mirror.aliyuncs.com    -> Aliyun ACR mirror accelerator discontinued
+#   docker.xuanyuan.m          -> DNS: no such host
+#   mirror.ccs.tencentyun.com  -> DNS: no such host
+#   hub-mirror.c.163.com       -> DNS: no such host
+#   mirror.baidubce.com        -> DNS: no such host
+#   docker.1panel.live         -> unauthorized
+#
+# So Docker Hub mirrors are a dead end for this repo. A registry the nodes can
+# reach directly is required. ghcr.io answered with "denied" rather than a
+# timeout, which suggests it is reachable; this job proves it with a few MB
+# instead of committing 78 GB to the wrong answer.
+#
+# Pushes ghcr.io/<owner>/sjy-reach-test:latest and makes the package public so
+# an unauthenticated pull works.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build a tiny image and push to GHCR
+        env:
+          OWNER: ${{ github.repository_owner }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${OWNER}/sjy-reach-test"
+          echo "$TOKEN" | podman login ghcr.io -u "${OWNER}" --password-stdin
+          printf 'FROM docker.io/library/alpine:3.20\nRUN echo "ghcr reachability probe" > /probe.txt\n' > /tmp/Dockerfile.probe
+          podman build -q -t "${IMAGE}:latest" -f /tmp/Dockerfile.probe /tmp
+          podman push "${IMAGE}:latest"
+          echo "pushed ${IMAGE}:latest"
+
+      - name: Make the package public
+        env:
+          OWNER: ${{ github.repository_owner }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The CLI token usually lacks packages: scope, so flipping visibility has to
+          # happen from inside the workflow with GITHUB_TOKEN.
+          curl -s -o /dev/null -w "PATCH visibility -> %{http_code}\n" -X PATCH \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/user/packages/container/sjy-reach-test" \
+            -d '{"visibility":"public"}' || true
+
+      - name: Verify the package is anonymously pullable
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # Anonymous token, then a manifest read: exactly what a Chinese node does.
+          TOK=$(curl -s "https://ghcr.io/token?scope=repository:${OWNER}/sjy-reach-test:pull&service=ghcr.io" | jq -r .token)
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${TOK}" \
+            -H "Accept: application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json" \
+            "https://ghcr.io/v2/${OWNER}/sjy-reach-test/manifests/latest")
+          echo "anonymous manifest -> HTTP ${CODE}"
+          [ "$CODE" = "200" ] || { echo "ERROR: package is not anonymously pullable"; exit 1; }
