@@ -1,0 +1,113 @@
+name: Copy image to GHCR
+
+# suanjiayun.com (算家云) cannot pull from Docker Hub at all — measured on their own
+# platform, from the pull-failure tooltips:
+#
+#   registry-1.docker.io      Client.Timeout exceeded while awaiting headers  (blocked)
+#   docker.m.daocloud.io      this image is not in the allowlist
+#   xxx.mirror.aliyuncs.com   Aliyun ACR mirror accelerator discontinued
+#   docker.xuanyuan.m         DNS: no such host
+#   mirror.ccs.tencentyun.com DNS: no such host
+#   hub-mirror.c.163.com      DNS: no such host
+#   mirror.baidubce.com       DNS: no such host
+#   docker.1panel.live        unauthorized
+#
+# GHCR, by contrast, works there: ghcr.io/moneywaters/sjy-reach-test:latest pulled to
+# "就绪" (ready) in about 60 seconds on 西南A区/GPU3017.
+#
+# so this copies the finished image from Docker Hub to GHCR. skopeo streams blobs
+# registry-to-registry, so the 78 GB never lands on the runner's disk (the runner has
+# ~110 GB free, and a podman pull+push of this image would not reliably fit).
+#
+# :models-chunked is chosen deliberately: 77.9 GB with a 3.16 GB maximum layer. Large
+# layers are what "反复卡住/重试" (repeatedly stall and retry) on the Chinese path.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to copy
+        default: models-chunked
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: comfyui-h3-novita
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install skopeo
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+          skopeo --version
+
+      - name: Copy Docker Hub -> GHCR
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
+          OWNER: ${{ github.repository_owner }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "$TOKEN" | skopeo login ghcr.io -u "${OWNER}" --password-stdin
+          skopeo login docker.io -u "${DOCKER_USER}" --password-stdin <<< "$DOCKER_PASS"
+
+          SRC="docker://docker.io/${DOCKER_USER}/${IMAGE}:${TAG}"
+          DST="docker://ghcr.io/${OWNER}/${IMAGE}:${TAG}"
+          echo "copying ${SRC} -> ${DST}"
+
+          # --all keeps every layer digest identical, so the composed layer structure
+          # (including the 3.16 GB maximum) survives the copy untouched.
+          skopeo copy --all --retry-times 5 "${SRC}" "${DST}"
+
+          echo "copy finished"
+          skopeo inspect --raw "${DST}" | python3 -c "
+import json,sys
+m=json.load(sys.stdin)
+ls=m.get('layers') or []
+print('  layers: %d  total: %.2f GB  largest: %.2f GB' % (
+    len(ls), sum(l['size'] for l in ls)/1e9, max(l['size'] for l in ls)/1e9))
+assert ls, 'no layers in copied manifest'
+assert max(l['size'] for l in ls) < 4*1024**3, 'oversized layer survived the copy'
+print('  OK: layer shape preserved')
+"
+
+      - name: Make the package public
+        env:
+          OWNER: ${{ github.repository_owner }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # GITHUB_TOKEN can change visibility for packages owned by the user account.
+          CODE=$(curl -s -o /tmp/vis.json -w '%{http_code}' -X PATCH \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/user/packages/container/${IMAGE}" \
+            -d '{"visibility":"public"}')
+          echo "PATCH visibility -> ${CODE}"
+          cat /tmp/vis.json | head -c 300 || true
+
+      - name: Verify anonymous pull works (what a Chinese node does)
+        env:
+          OWNER: ${{ github.repository_owner }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TOK=$(curl -s "https://ghcr.io/token?scope=repository:${OWNER}/${IMAGE}:pull&service=ghcr.io" | jq -r .token)
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${TOK}" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json" \
+            "https://ghcr.io/v2/${OWNER}/${IMAGE}/manifests/${TAG}")
+          echo "anonymous manifest -> HTTP ${CODE}"
+          [ "$CODE" = "200" ] || { echo "ERROR: not anonymously pullable"; exit 1; }
