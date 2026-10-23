@@ -48,7 +48,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq skopeo
+          sudo apt-get install -y -qq skopeo jq
           skopeo --version
 
       - name: Copy Docker Hub -> GHCR
@@ -72,16 +72,25 @@ jobs:
           skopeo copy --all --retry-times 5 "${SRC}" "${DST}"
 
           echo "copy finished"
-          skopeo inspect --raw "${DST}" | python3 -c "
-import json,sys
-m=json.load(sys.stdin)
-ls=m.get('layers') or []
-print('  layers: %d  total: %.2f GB  largest: %.2f GB' % (
-    len(ls), sum(l['size'] for l in ls)/1e9, max(l['size'] for l in ls)/1e9))
-assert ls, 'no layers in copied manifest'
-assert max(l['size'] for l in ls) < 4*1024**3, 'oversized layer survived the copy'
-print('  OK: layer shape preserved')
-"
+
+      - name: Assert the layer shape survived
+        env:
+          OWNER: ${{ github.repository_owner }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TOK=$(curl -s "https://ghcr.io/token?scope=repository:${OWNER}/${IMAGE}:pull&service=ghcr.io" | jq -r .token)
+          curl -s -H "Authorization: Bearer ${TOK}" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json" \
+            "https://ghcr.io/v2/${OWNER}/${IMAGE}/manifests/${TAG}" -o /tmp/man.json
+          LC=$(jq -r '.layers | length' /tmp/man.json)
+          BIGGEST=$(jq -r '[.layers[].size] | max' /tmp/man.json)
+          TOTAL=$(jq -r '[.layers[].size] | add' /tmp/man.json)
+          echo "  layers: ${LC}   total: $((TOTAL/1000000000)) GB   largest: $((BIGGEST/1000000000)) GB"
+          [ "$LC" -gt 0 ] || { echo "ERROR: no layers"; exit 1; }
+          [ "$BIGGEST" -lt 4294967296 ] || { echo "ERROR: a layer over 4 GB survived the copy"; exit 1; }
+          echo "  OK: no layer over 4 GB"
 
       - name: Make the package public
         env:
