@@ -57,12 +57,12 @@ jobs:
         run: |
           set -euo pipefail
           echo "$DOCKER_PASS" | skopeo login docker.io -u "${DOCKER_USER}" --password-stdin
-          mkdir -p /mnt/oci
+          mkdir -p "${HOME}/oci"
           echo "copying docker.io/${DOCKER_USER}/comfyui-h3-novita:${TAG} -> oci layout"
           time skopeo copy --retry-times 5 \
             "docker://docker.io/${DOCKER_USER}/comfyui-h3-novita:${TAG}" \
-            "oci:/mnt/oci:${TAG}"
-          du -sh /mnt/oci | sed 's/^/  layout: /'
+            "oci:${HOME}/oci:${TAG}"
+          du -sh "${HOME}/oci" | sed 's/^/  layout: /'
           df -h / | tail -1 | sed 's/^/  disk: /'
 
       - name: Upload to Storj
@@ -89,7 +89,7 @@ jobs:
           } > ~/.config/rclone/rclone.conf
           rclone lsd "storj:${STORJ_BUCKET}" | head -5 || true
           echo "uploading to storj:${STORJ_BUCKET}/${TAG}/ ..."
-          time rclone copy /mnt/oci "storj:${STORJ_BUCKET}/${TAG}" \
+          time rclone copy "${HOME}/oci" "storj:${STORJ_BUCKET}/${TAG}" \
             --transfers 8 --checkers 16 --s3-upload-concurrency 8 \
             --stats 30s --stats-one-line
           echo "--- verify ---"
