@@ -1,0 +1,101 @@
+name: Publish image to Storj
+
+# Why: suanjiayun.com cannot pull this image from anywhere.
+#
+#   registry-1.docker.io      Client.Timeout exceeded while awaiting headers  (blocked)
+#   every Chinese mirror      dead, or "this image is not in the allowlist"
+#   platform image cache      ingests at 0.1-0.7 MB/s -> 77.9 GB = 1.5-9 days
+#   docker.1ms.run / ghcr.io  served, but 0.08 / 0.05 MB/s from inside a node
+#
+# Measured from inside a 算家云 instance (RTX 3090), the only fast channel is Storj:
+#
+#   Storj S3 (gateway.storjshare.io)  ~7 MB/s   -> 77.9 GB in ~3 h
+#   hf-mirror.com                      1.7 MB/s  -> ~13 h
+#   upload from a Mac over SSH         0.28 MB/s -> ~78 h
+#
+# So the image is published to Storj, and the instance pulls from there.
+#
+# The instance cannot run docker (unshare -Ur is denied, no CAP_SYS_ADMIN), so this
+# uploads an OCI layout: the instance parses index.json for layer order and extracts
+# the layer tarballs itself. OCI keeps the layers compressed, so the transfer is
+# 77.9 GB rather than the ~90 GB an unpacked rootfs would cost.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to publish
+        default: models-chunked
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Install skopeo and rclone
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+          curl -s https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip
+          unzip -oq /tmp/rclone.zip -d /tmp/rcx
+          sudo cp /tmp/rcx/rclone-*/rclone /usr/local/bin/rclone
+          rclone version | head -1
+
+      - name: Show runner space before
+        run: df -h /
+
+      - name: Pull the image into an OCI layout
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "$DOCKER_PASS" | skopeo login docker.io -u "${DOCKER_USER}" --password-stdin
+          mkdir -p /mnt/oci
+          echo "copying docker.io/${DOCKER_USER}/comfyui-h3-novita:${TAG} -> oci layout"
+          time skopeo copy --retry-times 5 \
+            "docker://docker.io/${DOCKER_USER}/comfyui-h3-novita:${TAG}" \
+            "oci:/mnt/oci:${TAG}"
+          du -sh /mnt/oci | sed 's/^/  layout: /'
+          df -h / | tail -1 | sed 's/^/  disk: /'
+
+      - name: Upload to Storj
+        env:
+          STORJ_ACCESS_KEY: ${{ secrets.STORJ_ACCESS_KEY }}
+          STORJ_SECRET_KEY: ${{ secrets.STORJ_SECRET_KEY }}
+          STORJ_ENDPOINT: ${{ secrets.STORJ_ENDPOINT }}
+          STORJ_BUCKET: ${{ secrets.STORJ_BUCKET }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.config/rclone
+          # written with printf rather than a heredoc: YAML block scalars indent the
+          # body, and rclone will not read keys that arrive with leading spaces.
+          {
+            printf '[storj]\n'
+            printf 'type = s3\n'
+            printf 'provider = Other\n'
+            printf 'endpoint = %s\n' "${STORJ_ENDPOINT}"
+            printf 'access_key_id = %s\n' "${STORJ_ACCESS_KEY}"
+            printf 'secret_access_key = %s\n' "${STORJ_SECRET_KEY}"
+            printf 'region = us-east-1\n'
+            printf 'no_check_bucket = true\n'
+          } > ~/.config/rclone/rclone.conf
+          rclone lsd "storj:${STORJ_BUCKET}" | head -5 || true
+          echo "uploading to storj:${STORJ_BUCKET}/${TAG}/ ..."
+          time rclone copy /mnt/oci "storj:${STORJ_BUCKET}/${TAG}" \
+            --transfers 8 --checkers 16 --s3-upload-concurrency 8 \
+            --stats 30s --stats-one-line
+          echo "--- verify ---"
+          rclone size "storj:${STORJ_BUCKET}/${TAG}"
+          rclone lsf "storj:${STORJ_BUCKET}/${TAG}" --max-depth 1 | head -10
+
+      - name: Free space check
+        if: always()
+        run: df -h /
