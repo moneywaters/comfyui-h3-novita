@@ -1,17 +1,17 @@
 name: Build size-ladder test images
 
-# Question this answers: does suanjiayun.com block CUSTOM images, or is it purely size?
+# Question this answers: does suanjiayun.com block CUSTOM images, or is it size/throughput?
 #
-# Evidence so far is mixed and confounded by size:
-#   ghcr.io/moneywaters/sjy-reach-test:latest   custom,  3.46 MB -> pulled, 就绪 in ~60s
-#   ubuntu:22.04                                official,  29 MB -> pulled, 就绪 in ~20s
-#   registry.cn-hangzhou.aliyuncs.com/...       official, 33-54 MB -> pulled, 就绪 in 81-142s
-#   ghcr.io/moneywaters/comfyui-h3-novita:latest custom,  7.08 GB -> stalled at 4-6%
-#   ghcr.io/moneywaters/...:models-chunked       custom, 77.9 GB -> never moved off 0%
+# Evidence before this test was confounded by size:
+#   ghcr.io/.../sjy-reach-test:latest   custom,  3.46 MB -> pulled, 就绪 in ~60s
+#   ubuntu:22.04                        official,  29 MB -> pulled, 就绪 in ~20s
+#   registry.cn-hangzhou.aliyuncs.com   official, 33-54 MB -> pulled, 就绪 in 81-142s
+#   ghcr.io/.../comfyui-h3-novita:latest custom,  7.08 GB -> stalled
 #
-# Both custom successes are tiny and both custom failures are huge, so the two variables
-# are entangled. These tags vary ONLY size, all in the same custom namespace on the same
-# registry, so a pull of the small ones and a stall on the large one isolates size.
+# These tags vary ONLY size, all in the same custom namespace on the same registry.
+# 30 MB is sized against ubuntu's 29 MB, so "custom at the same size" is a direct
+# comparison. The 900 MB tag is additionally mirrored to Docker Hub, because
+# suanjiayun.com can resolve ghcr.io/token but cannot reach auth.docker.io at all.
 
 on:
   workflow_dispatch:
@@ -27,8 +27,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # MB of incompressible data. 30 MB is deliberately sized against ubuntu's 29 MB,
-        # which is known to pull, so "custom at the same size" is a direct comparison.
         size: [30, 120, 400, 900]
     steps:
       - name: Push ghcr.io/<owner>/sjy-size-test:<N>m
@@ -41,8 +39,8 @@ jobs:
           IMAGE="ghcr.io/${OWNER}/sjy-size-test"
           echo "$TOKEN" | podman login ghcr.io -u "${OWNER}" --password-stdin
 
-          # /dev/urandom so the layer does not compress away and the compressed size on
-          # the registry really is ~N MB.
+          # /dev/urandom so the layer does not compress away and the size on the
+          # registry really is ~N MB.
           printf 'FROM docker.io/library/alpine:3.20\nRUN dd if=/dev/urandom of=/blob bs=1M count=%s\n' \
             "${MB}" > /tmp/Dockerfile.size
 
@@ -50,3 +48,21 @@ jobs:
           podman push "${IMAGE}:${MB}m"
           echo "pushed ${IMAGE}:${MB}m"
           podman image inspect "${IMAGE}:${MB}m" --format '  size {{.Size}} bytes'
+
+      # Same bytes, same size, different registry.
+      - name: Mirror the 900m tag to Docker Hub
+        if: matrix.size == 900
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
+          OWNER: ${{ github.repository_owner }}
+          MB: ${{ matrix.size }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+          echo "$DOCKER_PASS" | skopeo login docker.io -u "${DOCKER_USER}" --password-stdin
+          skopeo copy --all \
+            "docker://ghcr.io/${OWNER}/sjy-size-test:${MB}m" \
+            "docker://docker.io/${DOCKER_USER}/sjy-size-test:${MB}m"
+          echo "mirrored to docker.io/${DOCKER_USER}/sjy-size-test:${MB}m"
