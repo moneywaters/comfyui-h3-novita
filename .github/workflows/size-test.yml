@@ -1,0 +1,52 @@
+name: Build size-ladder test images
+
+# Question this answers: does suanjiayun.com block CUSTOM images, or is it purely size?
+#
+# Evidence so far is mixed and confounded by size:
+#   ghcr.io/moneywaters/sjy-reach-test:latest   custom,  3.46 MB -> pulled, 就绪 in ~60s
+#   ubuntu:22.04                                official,  29 MB -> pulled, 就绪 in ~20s
+#   registry.cn-hangzhou.aliyuncs.com/...       official, 33-54 MB -> pulled, 就绪 in 81-142s
+#   ghcr.io/moneywaters/comfyui-h3-novita:latest custom,  7.08 GB -> stalled at 4-6%
+#   ghcr.io/moneywaters/...:models-chunked       custom, 77.9 GB -> never moved off 0%
+#
+# Both custom successes are tiny and both custom failures are huge, so the two variables
+# are entangled. These tags vary ONLY size, all in the same custom namespace on the same
+# registry, so a pull of the small ones and a stall on the large one isolates size.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # MB of incompressible data. 30 MB is deliberately sized against ubuntu's 29 MB,
+        # which is known to pull, so "custom at the same size" is a direct comparison.
+        size: [30, 120, 400, 900]
+    steps:
+      - name: Push ghcr.io/<owner>/sjy-size-test:<N>m
+        env:
+          OWNER: ${{ github.repository_owner }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MB: ${{ matrix.size }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${OWNER}/sjy-size-test"
+          echo "$TOKEN" | podman login ghcr.io -u "${OWNER}" --password-stdin
+
+          # /dev/urandom so the layer does not compress away and the compressed size on
+          # the registry really is ~N MB.
+          printf 'FROM docker.io/library/alpine:3.20\nRUN dd if=/dev/urandom of=/blob bs=1M count=%s\n' \
+            "${MB}" > /tmp/Dockerfile.size
+
+          podman build -q -t "${IMAGE}:${MB}m" -f /tmp/Dockerfile.size /tmp
+          podman push "${IMAGE}:${MB}m"
+          echo "pushed ${IMAGE}:${MB}m"
+          podman image inspect "${IMAGE}:${MB}m" --format '  size {{.Size}} bytes'
