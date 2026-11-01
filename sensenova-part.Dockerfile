@@ -11,4 +11,4 @@ COPY sensenova/fetch-part.sh /opt/fetch-part.sh
 RUN chmod +x /opt/fetch-part.sh
 
 # One part per image, so this layer commits reliably on a GHA runner.
-RUN PART="${PART}" /opt/fetch-part-parts.sh
+RUN PART="${PART}" /opt/fetch-part.sh
