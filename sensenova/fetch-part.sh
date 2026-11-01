@@ -12,4 +12,4 @@ snapshot_download(repo_id=os.environ.get("MODEL_REPO", "sensenova/SenseNova-6.8-
     local_dir="/model", allow_patterns=patterns)
 PY
 echo "part done: $1"
-ls /model/*.safetensors 2>/dev/null | wc -l
+ls /model/*.safetensors 2>/dev/null | wc -l || true
