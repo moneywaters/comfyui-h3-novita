@@ -1,8 +1,8 @@
 name: Build & push SenseNova Code2Video baked image
 
-# Full-BF16 vLLM image for PPIO (see Dockerfile). No quant, no GPU needed
-# for the build — just a big x86 download + layer commit, so GitHub-hosted
-# runners do it (NOT the M-series Mac: podman/qemu x86 emulation hangs).
+# Full-BF16 vLLM image for PPIO. Split build (same pattern as build.yml):
+# each part image holds ~9 GB, no runner ever holds the full ~65 GB.
+# compose-image.py stitches env + parts at the registry.
 #
 # Required repository secrets: DOCKER_USER, DOCKER_PASS
 # (HF model is public — no HF_TOKEN needed.)
@@ -15,32 +15,66 @@ permissions:
 
 env:
   IMAGE: sensenova-code2video
+  PARTS: p0,p1,p2,p3,p4,p5,p6
 
 jobs:
-  build:
+  env:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-
       - name: Ensure podman
         run: |
           command -v podman >/dev/null 2>&1 || \
             sudo apt-get update -qq && sudo apt-get install -y -qq podman
-          podman --version
-
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASS }}" | podman login docker.io -u "${{ secrets.DOCKER_USER }}" --password-stdin
-
-      - name: Build baked BF16
+      - name: Build env
         run: |
           set -euo pipefail
           podman build --format docker \
-            -t "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:bf16" -f sensenova/Dockerfile .
-          podman image inspect "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:bf16" --format 'size {{.Size}} bytes'
-          df -h /
+            -t "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:env" \
+            -f sensenova-env.Dockerfile .
+          podman push "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:env"
 
-      - name: Push
+  part:
+    needs: [env]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [p0, p1, p2, p3, p4, p5, p6]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure podman
+        run: |
+          command -v podman >/dev/null 2>&1 || \
+            sudo apt-get update -qq && sudo apt-get install -y -qq podman
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASS }}" | podman login docker.io -u "${{ secrets.DOCKER_USER }}" --password-stdin
+      - name: Build this part
         run: |
           set -euo pipefail
-          podman push "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:bf16"
+          podman build --format docker \
+            --build-arg ENV_TAG=env \
+            --build-arg PART="${{ matrix.part }}" \
+            -t "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:part-${{ matrix.part }}" \
+            -f sensenova-part.Dockerfile .
+          podman push "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:part-${{ matrix.part }}"
+
+  compose:
+    needs: [env, part]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose + publish baked tag
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
+        run: |
+          set -euo pipefail
+          prefix() { local out=""; for p in $(echo "$1" | tr ',' ' '); do out="${out}${out:+,}part-${p}"; done; echo "$out"; }
+          python3 ops/compose-image.py --repo "${DOCKER_USER}/${{ env.IMAGE }}" \
+            --env env --parts "$(prefix "$PARTS")" --out baked --no-latest
