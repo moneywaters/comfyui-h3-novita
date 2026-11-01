@@ -1,0 +1,46 @@
+name: Build & push SenseNova Code2Video baked image
+
+# Full-BF16 vLLM image for PPIO (see Dockerfile). No quant, no GPU needed
+# for the build — just a big x86 download + layer commit, so GitHub-hosted
+# runners do it (NOT the M-series Mac: podman/qemu x86 emulation hangs).
+#
+# Required repository secrets: DOCKER_USER, DOCKER_PASS
+# (HF model is public — no HF_TOKEN needed.)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: sensenova-code2video
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure podman
+        run: |
+          command -v podman >/dev/null 2>&1 || \
+            sudo apt-get update -qq && sudo apt-get install -y -qq podman
+          podman --version
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASS }}" | podman login docker.io -u "${{ secrets.DOCKER_USER }}" --password-stdin
+
+      - name: Build baked BF16
+        run: |
+          set -euo pipefail
+          podman build --format docker \
+            -t "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:bf16" .
+          podman image inspect "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:bf16" --format 'size {{.Size}} bytes'
+          df -h /
+
+      - name: Push
+        run: |
+          set -euo pipefail
+          podman push "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:bf16"
