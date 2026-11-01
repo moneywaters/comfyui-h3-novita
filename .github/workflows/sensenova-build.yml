@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           podman build --format docker \
-            -t "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:bf16" .
+            -t "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:bf16" -f sensenova/Dockerfile .
           podman image inspect "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:bf16" --format 'size {{.Size}} bytes'
           df -h /
 
