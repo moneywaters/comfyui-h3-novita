@@ -18,5 +18,8 @@ import os
 snapshot_download(repo_id=os.environ.get("MODEL_REPO", "sensenova/SenseNova-6.8-Code2Video"),
     local_dir="/model", allow_patterns="$PATTERNS".split())
 PY
+# snapshot_download keeps a full blob cache (~same size as the files) in
+# ~/.cache/huggingface. Delete it in the SAME layer or the image doubles.
+rm -rf /root/.cache/huggingface /tmp/hf-* /tmp/tmp*
 echo "part $PART done"
 du -sh /model 2>/dev/null || true
