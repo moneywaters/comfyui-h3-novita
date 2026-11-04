@@ -296,6 +296,8 @@ def compose(args):
 
 
 def main():
+    # noqa: F824 -- rebind shared base at runtime when parts use another CUDA
+    global BASE_IMAGE
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True)
     ap.add_argument("--env", required=True)
@@ -308,7 +310,12 @@ def main():
                     help="do not also publish :latest (the code-only job owns it)")
     ap.add_argument("--oci", action="store_true", help="force OCI media types")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--base-image", default=BASE_IMAGE,
+                    help="base the parts were built FROM (shared-prefix drop)")
     args = ap.parse_args()
+    if args.base_image != BASE_IMAGE:
+        BASE_IMAGE = args.base_image
+        log(f"  base override: {BASE_IMAGE}")
     args.parts = [p for p in args.parts.split(",") if p.strip()]
     try:
         return compose(args)

@@ -4,7 +4,8 @@
 # onto the env image. Building FROM env would re-embed the whole vLLM stack
 # in every part (that's how `baked` hit 119 GB).
 # Build: podman build --build-arg PART=p1 -f sensenova-part.Dockerfile .
-FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
+# CUDA 12.8 to match the env image (Novita/PPIO 4090 hosts reject cuda>=13.0).
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG PART=p1

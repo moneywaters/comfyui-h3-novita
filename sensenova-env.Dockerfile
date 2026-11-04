@@ -5,10 +5,13 @@
 # prewarms in ~14 min). This keeps env to ~6 layers, baked to ~13.
 # No model weights here. Parts (Dockerfile.part) build FROM the same CUDA
 # base, then compose-image.py stitches env + parts at the registry.
-FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
+#
+# CUDA 12.8 (NOT 13.0): Novita/PPIO 4090 hosts run drivers that reject
+# cuda>=13.0 containers (nvidia-container-cli "unsatisfied condition").
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG TORCH_INDEX=cu130
+ARG TORCH_INDEX=cu128
 
 ENV MODEL_REPO="sensenova/SenseNova-6.8-Code2Video" \
     MODEL_ID="/model" \

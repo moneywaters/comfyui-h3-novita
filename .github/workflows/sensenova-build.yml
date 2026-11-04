@@ -77,4 +77,5 @@ jobs:
           set -euo pipefail
           prefix() { local out=""; for p in $(echo "$1" | tr ',' ' '); do out="${out}${out:+,}part-${p}"; done; echo "$out"; }
           python3 ops/compose-image.py --repo "${DOCKER_USER}/${{ env.IMAGE }}" \
-            --env env --parts "$(prefix "$PARTS")" --out baked --no-latest
+            --env env --parts "$(prefix "$PARTS")" --out baked --no-latest \
+            --base-image "nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04"
