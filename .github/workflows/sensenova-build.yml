@@ -9,6 +9,11 @@ name: Build & push SenseNova Code2Video baked image
 
 on:
   workflow_dispatch:
+    inputs:
+      parts:
+        description: "Comma-separated parts to (re)build, e.g. p1,p3. Empty = skip all part builds and reuse existing part-* tags (use when only env/ start script changed)."
+        default: "p0,p1,p2,p3,p4,p5,p6"
+        required: false
 
 permissions:
   contents: read
@@ -18,6 +23,25 @@ env:
   PARTS: p0,p1,p2,p3,p4,p5,p6
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.mk.outputs.matrix }}
+      csv: ${{ steps.mk.outputs.csv }}
+    steps:
+      - id: mk
+        run: |
+          P="${{ inputs.parts }}"
+          if [ -z "${P// /}" ]; then
+            echo 'matrix=[]' >> "$GITHUB_OUTPUT"
+            echo 'csv=' >> "$GITHUB_OUTPUT"
+          else
+            JSON=$(python3 -c "import json;print(json.dumps([p.strip() for p in '$P'.split(',') if p.strip()]))")
+            echo "matrix=$JSON" >> "$GITHUB_OUTPUT"
+            echo "csv=$P" >> "$GITHUB_OUTPUT"
+          fi
+          echo "parts to build: ${P:-(none — reusing registry tags)}"
+
   env:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -38,13 +62,14 @@ jobs:
           podman push "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:env"
 
   part:
-    needs: [env]
+    needs: [setup, env]
+    if: ${{ needs.setup.outputs.csv != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        part: [p0, p1, p2, p3, p4, p5, p6]
+        part: ${{ fromJSON(needs.setup.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
       - name: Ensure podman
@@ -64,7 +89,10 @@ jobs:
           podman push "docker.io/${{ secrets.DOCKER_USER }}/${{ env.IMAGE }}:part-${{ matrix.part }}"
 
   compose:
-    needs: [env, part]
+    needs: [setup, env, part]
+    # part is skipped when csv is empty; `always()` keeps compose running,
+    # and the result check fails the run only if an executed job failed.
+    if: ${{ always() && needs.setup.result == 'success' && needs.env.result == 'success' && (needs.part.result == 'success' || needs.part.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
