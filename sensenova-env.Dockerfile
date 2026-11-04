@@ -29,13 +29,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh \
     && python3 -m venv /opt/venv
 
-# vLLM + serving stack in ONE layer (qwen3_5 arch needs vLLM >= 0.17;
-# pip latest is past that). Mirrors the ComfyUI cu130 torch pattern.
+# torch first (its own layer — committing torch+vLLM together exceeds
+# runner disk). Mirrors ComfyUI Dockerfile.env's staged RUNs.
 RUN /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/venv/bin/pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/${TORCH_INDEX} \
-        torch \
-    && /opt/venv/bin/pip install --no-cache-dir \
+        torch
+
+# vLLM + serving stack, separate layer (qwen3_5 arch needs vLLM >= 0.17).
+RUN /opt/venv/bin/pip install --no-cache-dir \
         "vllm>=0.17" huggingface_hub
 
 COPY sensenova/start.sh /opt/sensenova-start.sh
